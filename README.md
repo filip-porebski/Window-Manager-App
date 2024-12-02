@@ -18,6 +18,17 @@ The application is lightweight and runs in the background, residing in the syste
 -   **Start with Windows**: Option to launch the app automatically when Windows starts.
 -   **Start minimized**: The app starts minimized to the system tray by default.
 
+## Screenshots
+
+![alt text](https://i.imgur.com/KYUOG7d.png)
+
+![alt text](https://i.imgur.com/BehTtAP.png)
+
+![alt text](https://i.imgur.com/JvAenjx.png)
+
+![alt text](https://i.imgur.com/PGxBUZt.png)
+
+
 ## Installation
 
 ### Prerequisites
