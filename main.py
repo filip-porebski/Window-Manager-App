@@ -6,8 +6,7 @@ import logging
 import time
 import tkinter as tk
 from tkinter import ttk, messagebox
-from typing import Callable, Dict, Optional, Tuple
-from collections import namedtuple
+from typing import Callable, Dict, Optional, Tuple, NamedTuple, TypedDict, Any
 
 import keyboard
 import win32gui
@@ -17,12 +16,14 @@ import winreg
 from PIL import Image, ImageDraw
 import pystray
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Constants and Type Definitions
-RECT = namedtuple('RECT', 'left top right bottom')
+class RECT(NamedTuple):
+    left: int
+    top: int
+    right: int
+    bottom: int
 
 def rects_intersect(a: RECT, b: RECT) -> bool:
     """Check if two rectangles intersect."""
@@ -33,6 +34,11 @@ def get_current_monitor() -> int:
     cursor = win32gui.GetCursorPos()
     return win32api.MonitorFromPoint(cursor, win32con.MONITOR_DEFAULTTONEAREST)
 
+class MonitorInfo(TypedDict):
+    Monitor: Tuple[int, int, int, int]
+    Work: Tuple[int, int, int, int]
+    Flags: int
+
 class WindowManagerApp(tk.Tk):
     """Main application class for the Window Manager App."""
 
@@ -40,7 +46,7 @@ class WindowManagerApp(tk.Tk):
         super().__init__()
         self.title("Window Manager App")
         self.geometry("400x550")
-        self.icon: Optional[pystray.Icon] = None
+        self.icon: Optional[Any] = None
         self.hotkeys: Dict[str, Callable] = {}
         self.hwnd = self.winfo_id()
         self.startup_var = tk.BooleanVar()
@@ -51,6 +57,8 @@ class WindowManagerApp(tk.Tk):
         self._load_settings()
         self._register_hotkeys()
         self.protocol("WM_DELETE_WINDOW", self.on_exit)
+
+        self.after(100, self.minimize_to_tray)
 
     def _create_widgets(self):
         """Create GUI widgets."""
@@ -197,7 +205,7 @@ class WindowManagerApp(tk.Tk):
             return None
         return hwnd
 
-    def _get_monitor_info(self, hwnd: int) -> Dict[str, Tuple[int, int, int, int]]:
+    def _get_monitor_info(self, hwnd: int) -> MonitorInfo:
         """Get the monitor information for the given window handle."""
         monitor = win32api.MonitorFromWindow(hwnd, win32con.MONITOR_DEFAULTTONEAREST)
         return win32api.GetMonitorInfo(monitor)
@@ -254,8 +262,9 @@ class WindowManagerApp(tk.Tk):
             pystray.MenuItem('Restore', self.restore_window),
             pystray.MenuItem('Exit', self.exit_app)
         )
-        self.icon = pystray.Icon("WindowManagerApp", image, "Window Manager App", menu)
-        threading.Thread(target=self.icon.run, daemon=True).start()
+        icon = pystray.Icon("WindowManagerApp", image, "Window Manager App", menu)
+        self.icon = icon
+        threading.Thread(target=icon.run, daemon=True).start()
         logger.info("Application minimized to tray.")
 
     def restore_window(self):
@@ -371,7 +380,6 @@ class WindowManagerApp(tk.Tk):
             for symbol, name in hotkey_replacements.items():
                 hotkey = hotkey.replace(symbol, name)
             self.tree.insert('', 'end', values=(percentage, hotkey))
-
 
     def _start_minimize_sequence(self):
         """Start the minimize sequence when Ctrl+Shift+H is pressed."""
