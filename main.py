@@ -52,21 +52,39 @@ class WindowManagerApp(tk.Tk):
 
     def __init__(self):
         super().__init__()
+        self._initialize_window()
+        self._initialize_state_variables()
+        self._setup_ui()
+        self._configure_window_behavior()
+        self._start_minimized()
+
+    def _initialize_window(self):
+        """Configure initial window properties."""
         self.title("Window Manager App")
         self.geometry("400x550")
+        self.hwnd = self.winfo_id()
+
+    def _initialize_state_variables(self):
+        """Initialize instance variables and state tracking."""
         self.icon: Optional[Any] = None
         self.hotkeys: Dict[str, Callable] = {}
-        self.hwnd = self.winfo_id()
         self.startup_var = tk.BooleanVar()
         self.minimize_sequence_started = False
         self.minimize_sequence_start_time = 0
 
+    def _setup_ui(self):
+        """Set up UI components and load settings."""
         self._create_widgets()
         self._load_settings()
         self._register_hotkeys()
+
+    def _configure_window_behavior(self):
+        """Configure window-level event handlers."""
         self.protocol("WM_DELETE_WINDOW", self.on_exit)
 
-        self.withdraw()  # Hide the window immediately
+    def _start_minimized(self):
+        """Start application minimized to system tray."""
+        self.withdraw()
         self.minimize_to_tray()
 
     def _create_widgets(self):
