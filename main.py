@@ -5,6 +5,7 @@ import threading
 import logging
 import time
 import tkinter as tk
+import winreg
 from tkinter import ttk, messagebox
 from typing import Callable, Dict, Optional, Tuple, NamedTuple, TypedDict, Any
 
@@ -12,7 +13,6 @@ import keyboard
 import win32gui
 import win32con
 import win32api
-import winreg
 from PIL import Image, ImageDraw
 import pystray
 
@@ -20,6 +20,14 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class RECT(NamedTuple):
+    """A named tuple representing a rectangle with left, top, right, and bottom coordinates.
+
+    Attributes:
+        left (int): The x-coordinate of the left edge
+        top (int): The y-coordinate of the top edge
+        right (int): The x-coordinate of the right edge
+        bottom (int): The y-coordinate of the bottom edge
+    """
     left: int
     top: int
     right: int
@@ -58,7 +66,8 @@ class WindowManagerApp(tk.Tk):
         self._register_hotkeys()
         self.protocol("WM_DELETE_WINDOW", self.on_exit)
 
-        self.after(100, self.minimize_to_tray)
+        self.withdraw()  # Hide the window immediately
+        self.minimize_to_tray()
 
     def _create_widgets(self):
         """Create GUI widgets."""
