@@ -7,14 +7,14 @@ from typing import List, Dict
 
 class BuildConfig:
     """Configuration settings for the build process."""
-    APP_NAME = "Window Manager"
+    APP_NAME = "windowmanagerapp"
     VERSION = "1.0.0"
     AUTHOR = "Filip Porebski"
     DESCRIPTION = "Window Manager Application"
     
     # Build settings
     ENTRY_POINT = "main.py"
-    # ICON_FILE = "app_icon.ico"
+    ICON_FILE = "app_icon.ico"
     REQUIRED_FILES = ["settings.json"]
     OUTPUT_DIR = "dist"
     BUILD_DIR = "build"
