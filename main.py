@@ -94,8 +94,14 @@ class WindowManagerApp(tk.Tk):
         shortcut_frame.pack(padx=10, pady=10, fill="x")
 
         self.shortcuts_entries = {}
-        shortcuts = [("Resize to 80%", "resize_80"), ("Fullscreen", "fullscreen"),
-                     ("Center Window", "center"), ("Resize to 60%", "resize_60")]
+        shortcuts = [
+            ("Resize to 80%", "resize_80"),
+            ("Fullscreen", "fullscreen"),
+            ("Center Window", "center"),
+            ("Resize to 60%", "resize_60"),
+            ("Make Smaller", "make_smaller"),
+            ("Make Bigger", "make_bigger"),
+        ]
 
         for idx, (label_text, key) in enumerate(shortcuts):
             ttk.Label(shortcut_frame, text=f"{label_text}:").grid(row=idx, column=0, sticky="w")
@@ -167,7 +173,9 @@ class WindowManagerApp(tk.Tk):
             'resize_80': self.resize_to_80,
             'fullscreen': self.fullscreen,
             'center': self.center_window,
-            'resize_60': self.resize_to_60
+            'resize_60': self.resize_to_60,
+            'make_smaller': self.make_smaller,
+            'make_bigger': self.make_bigger,
         }
 
         for key, action in actions.items():
@@ -280,6 +288,46 @@ class WindowManagerApp(tk.Tk):
             top = work_area[1] + ((work_area[3] - work_area[1]) - window_height) // 2
             win32gui.SetWindowPos(hwnd, None, left, top, window_width, window_height, win32con.SWP_NOZORDER)
             logger.info(f"Centered window {hwnd} at ({left}, {top})")
+
+    def make_smaller(self):
+        """Shrink the foreground window by 15px on each side."""
+        hwnd = self._get_foreground_window()
+        if hwnd:
+            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+            new_left = left + 15
+            new_top = top + 15
+            width = (right - left) - 30
+            height = (bottom - top) - 30
+            win32gui.SetWindowPos(
+                hwnd,
+                None,
+                new_left,
+                new_top,
+                width,
+                height,
+                win32con.SWP_NOZORDER,
+            )
+            logger.info(f"Made window {hwnd} smaller by 15px on each side")
+
+    def make_bigger(self):
+        """Expand the foreground window by 15px on each side."""
+        hwnd = self._get_foreground_window()
+        if hwnd:
+            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+            new_left = left - 15
+            new_top = top - 15
+            width = (right - left) + 30
+            height = (bottom - top) + 30
+            win32gui.SetWindowPos(
+                hwnd,
+                None,
+                new_left,
+                new_top,
+                width,
+                height,
+                win32con.SWP_NOZORDER,
+            )
+            logger.info(f"Made window {hwnd} bigger by 15px on each side")
 
     def minimize_to_tray(self):
         """Minimize the application window to the system tray."""

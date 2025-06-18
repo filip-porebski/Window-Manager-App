@@ -11,6 +11,7 @@ The application is lightweight and runs in the background, residing in the syste
 -   **Resize windows**: Quickly resize the active window to predefined percentages (e.g., 80%, 60%) or custom sizes.
 -   **Center windows**: Center the active window on the screen without changing its size.
 -   **Fullscreen**: Maximize the active window to fill the entire screen.
+-   **Incremental resize**: Use shortcuts to make the active window 15px bigger or smaller.
 -   **Custom hotkeys**: Assign your preferred keyboard shortcuts to different actions.
 -   **Custom resize actions**: Add custom resize percentages with associated hotkeys.
 -   **Minimize all windows**: Minimize all windows on the current desktop with a specific hotkey sequence.
@@ -69,6 +70,8 @@ To open the main window of the application:
     -   **Fullscreen**
     -   **Center Window**
     -   **Resize to 60%**
+    -   **Make Smaller**
+    -   **Make Bigger**
     
     Enter your desired hotkeys in the corresponding fields.
     
