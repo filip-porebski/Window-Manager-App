@@ -16,7 +16,14 @@ import win32api
 from PIL import Image, ImageDraw
 import pystray
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('window_manager.log'),
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger(__name__)
 
 class RECT(NamedTuple):
@@ -72,12 +79,17 @@ class WindowManagerApp(tk.Tk):
         self.minimize_sequence_started = False
         self.minimize_sequence_start_time = 0
         self.resize_increment = 10  # Default resize increment in pixels
+        self.hotkey_monitor_thread = None
+        self.hotkey_monitor_running = False
+        self.last_hotkey_test_time = 0
+        self.hotkey_failure_count = 0
 
     def _setup_ui(self):
         """Set up UI components and load settings."""
         self._create_widgets()
         self._load_settings()
         self._register_hotkeys()
+        self._start_hotkey_monitor()
 
     def _configure_window_behavior(self):
         """Configure window-level event handlers."""
@@ -195,17 +207,30 @@ class WindowManagerApp(tk.Tk):
         self._register_hotkey('ctrl+shift+m', self._complete_minimize_sequence)
 
     def _register_hotkey(self, hotkey: str, action: Callable):
-        """Register a single hotkey."""
+        """Register a single hotkey with enhanced error handling."""
         if not hotkey.strip():
             logger.warning("Empty hotkey provided; skipping registration.")
             return
-        try:
-            keyboard.add_hotkey(hotkey, action)
-            self.hotkeys[hotkey] = action
-            logger.info(f"Registered hotkey: {hotkey}")
-        except ValueError as e:
-            messagebox.showerror("Error", f"Failed to register hotkey '{hotkey}': {e}")
-            logger.error(f"Failed to register hotkey '{hotkey}': {e}")
+        
+        # Unregister existing hotkey if it exists
+        self._unregister_hotkey(hotkey)
+        
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                keyboard.add_hotkey(hotkey, action, suppress=False, timeout=1)
+                self.hotkeys[hotkey] = action
+                logger.info(f"Registered hotkey: {hotkey} (attempt {attempt + 1})")
+                return
+            except ValueError as e:
+                logger.error(f"Failed to register hotkey '{hotkey}' (attempt {attempt + 1}): {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(0.1)  # Brief delay before retry
+                else:
+                    logger.error(f"Failed to register hotkey '{hotkey}' after {max_retries} attempts")
+            except Exception as e:
+                logger.error(f"Unexpected error registering hotkey '{hotkey}': {e}")
+                break
 
     def _register_custom_hotkey(self, percentage: str, hotkey: str):
         """Register a custom resize action hotkey."""
@@ -213,18 +238,110 @@ class WindowManagerApp(tk.Tk):
         self._register_hotkey(hotkey, resize_action)
 
     def _unregister_hotkey(self, hotkey: str):
-        """Unregister a single hotkey."""
+        """Unregister a single hotkey with enhanced error handling."""
+        if not hotkey.strip():
+            return
         try:
             keyboard.remove_hotkey(hotkey)
             self.hotkeys.pop(hotkey, None)
             logger.info(f"Unregistered hotkey: {hotkey}")
-        except KeyError:
-            pass
+        except (KeyError, ValueError):
+            # Hotkey wasn't registered or already removed
+            self.hotkeys.pop(hotkey, None)
+        except Exception as e:
+            logger.error(f"Error unregistering hotkey '{hotkey}': {e}")
+            self.hotkeys.pop(hotkey, None)
 
     def _unregister_all_hotkeys(self):
         """Unregister all hotkeys."""
         for hotkey in list(self.hotkeys.keys()):
             self._unregister_hotkey(hotkey)
+
+    def _start_hotkey_monitor(self):
+        """Start the hotkey monitoring thread."""
+        self.hotkey_monitor_running = True
+        self.hotkey_monitor_thread = threading.Thread(target=self._hotkey_monitor_loop, daemon=True)
+        self.hotkey_monitor_thread.start()
+        logger.info("Hotkey monitor started.")
+
+    def _stop_hotkey_monitor(self):
+        """Stop the hotkey monitoring thread."""
+        self.hotkey_monitor_running = False
+        if self.hotkey_monitor_thread and self.hotkey_monitor_thread.is_alive():
+            self.hotkey_monitor_thread.join(timeout=1)
+        logger.info("Hotkey monitor stopped.")
+
+    def _hotkey_monitor_loop(self):
+        """Monitor hotkeys and re-register them if they stop working."""
+        while self.hotkey_monitor_running:
+            try:
+                time.sleep(5)  # Check every 5 seconds
+                if not self.hotkey_monitor_running:
+                    break
+                
+                # Test if hotkeys are still working by checking keyboard state
+                current_time = time.time()
+                if current_time - self.last_hotkey_test_time > 30:  # Test every 30 seconds
+                    self._test_hotkey_system()
+                    self.last_hotkey_test_time = current_time
+                
+            except Exception as e:
+                logger.error(f"Error in hotkey monitor loop: {e}")
+                time.sleep(10)  # Wait longer on error
+
+    def _test_hotkey_system(self):
+        """Test if the hotkey system is still working."""
+        try:
+            # Check if keyboard module is still responsive
+            if not hasattr(keyboard, '_listener') or not keyboard._listener:
+                logger.warning("Keyboard listener appears to be inactive. Re-registering hotkeys.")
+                self._recover_hotkeys()
+                return
+            
+            # Check if we have registered hotkeys
+            if not self.hotkeys:
+                logger.warning("No hotkeys registered. Re-registering hotkeys.")
+                self._recover_hotkeys()
+                return
+                
+            # Try to get current pressed keys (this will fail if keyboard hook is broken)
+            keyboard.is_pressed('ctrl')
+            
+            logger.debug("Hotkey system test passed.")
+            self.hotkey_failure_count = 0
+            
+        except Exception as e:
+            self.hotkey_failure_count += 1
+            logger.warning(f"Hotkey system test failed (count: {self.hotkey_failure_count}): {e}")
+            
+            if self.hotkey_failure_count >= 3:
+                logger.error("Multiple hotkey system failures detected. Attempting recovery.")
+                self._recover_hotkeys()
+                self.hotkey_failure_count = 0
+
+    def _recover_hotkeys(self):
+        """Recover hotkeys after system failure."""
+        try:
+            logger.info("Attempting to recover hotkey system...")
+            
+            # Clear all existing hotkeys
+            try:
+                keyboard.unhook_all()
+            except:
+                pass
+            
+            # Wait a moment for cleanup
+            time.sleep(1)
+            
+            # Re-register all hotkeys
+            self._register_hotkeys()
+            
+            logger.info("Hotkey system recovery completed.")
+            
+        except Exception as e:
+            logger.error(f"Failed to recover hotkey system: {e}")
+            # Try again in a few seconds
+            threading.Timer(5.0, self._recover_hotkeys).start()
 
     def _create_resize_function(self, percentage: float) -> Callable:
         """Create a resize function for a given percentage."""
@@ -348,6 +465,8 @@ class WindowManagerApp(tk.Tk):
         image = self._create_tray_icon_image()
         menu = pystray.Menu(
             pystray.MenuItem('Restore', self.restore_window),
+            pystray.MenuItem(lambda item: f'Hotkeys: {len(self.hotkeys)} active', None, enabled=False),
+            pystray.MenuItem('Recover Hotkeys', self._recover_hotkeys),
             pystray.MenuItem('Exit', self.exit_app)
         )
         icon = pystray.Icon("WindowManagerApp", image, "Window Manager App", menu)
@@ -379,7 +498,12 @@ class WindowManagerApp(tk.Tk):
 
     def on_exit(self):
         """Handle application exit."""
+        self._stop_hotkey_monitor()
         self._unregister_all_hotkeys()
+        try:
+            keyboard.unhook_all()
+        except:
+            pass
         self.destroy()
         logger.info("Application exited.")
 

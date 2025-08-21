@@ -3,12 +3,12 @@ import subprocess
 import sys
 import shutil
 from pathlib import Path
-from typing import List, Dict
+from typing import List
 
 class BuildConfig:
     """Configuration settings for the build process."""
     APP_NAME = "windowmanagerapp"
-    VERSION = "1.0.0"
+    VERSION = "1.0.1"
     AUTHOR = "Filip Porebski"
     DESCRIPTION = "Window Manager Application"
     
@@ -29,6 +29,15 @@ class ExecutableBuilder:
     def _validate_requirements(self) -> None:
         """Validate all required files and dependencies exist."""
         missing_files = []
+        
+        # Check if PyInstaller is available
+        try:
+            subprocess.run(["pyinstaller", "--version"], 
+                         capture_output=True, check=True)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            print("Error: PyInstaller is not installed or not in PATH.")
+            print("Please install it with: pip install pyinstaller")
+            sys.exit(1)
         
         # Check entry point
         if not Path(self.config.ENTRY_POINT).exists():
@@ -130,15 +139,22 @@ VSVersionInfo(
             if Path("version.txt").exists():
                 os.remove("version.txt")
             
-            print(f"\nBuild completed successfully!")
+            print("\nBuild completed successfully!")
             print(f"Executable location: {self.config.OUTPUT_DIR}/{self.config.APP_NAME}.exe")
             
         except subprocess.CalledProcessError as e:
-            print(f"Error during build process:")
-            print(f"Command output: {e.output}")
+            print("Error during build process:")
+            print(f"Return code: {e.returncode}")
+            if e.stdout:
+                print(f"Standard output:\n{e.stdout}")
+            if e.stderr:
+                print(f"Standard error:\n{e.stderr}")
+            print("\nTry running the command manually to see more details:")
+            print(" ".join(self._get_pyinstaller_command()))
             sys.exit(1)
         except Exception as e:
             print(f"Unexpected error during build: {str(e)}")
+            print(f"Error type: {type(e).__name__}")
             sys.exit(1)
 
 def main():
