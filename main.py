@@ -68,7 +68,9 @@ class WindowManagerApp(tk.Tk):
     def _initialize_window(self):
         """Configure initial window properties."""
         self.title("Window Manager App")
+        # Set initial size but allow dynamic resizing
         self.geometry("400x550")
+        self.minsize(400, 400)  # Set minimum size
         self.hwnd = self.winfo_id()
 
     def _initialize_state_variables(self):
@@ -94,6 +96,8 @@ class WindowManagerApp(tk.Tk):
     def _configure_window_behavior(self):
         """Configure window-level event handlers."""
         self.protocol("WM_DELETE_WINDOW", self.on_exit)
+        # Bind window state change events to handle minimize to tray
+        self.bind('<Unmap>', self.on_window_minimize)
 
     def _start_minimized(self):
         """Start application minimized to system tray."""
@@ -156,6 +160,36 @@ class WindowManagerApp(tk.Tk):
         # Minimize to Tray Button
         self.minimize_button = ttk.Button(self, text="Minimize to Tray", command=self.minimize_to_tray)
         self.minimize_button.pack(pady=5)
+        
+        # Auto-adjust window size after all widgets are created
+        self.after_idle(self._auto_adjust_window_size)
+
+    def _auto_adjust_window_size(self):
+        """Automatically adjust window size to fit all widgets."""
+        # Update the window to ensure all widgets are properly sized
+        self.update_idletasks()
+        
+        # Get the required height for all widgets
+        required_height = self.winfo_reqheight()
+        
+        # Add some padding for better appearance
+        padding = 40
+        new_height = required_height + padding
+        
+        # Ensure minimum height
+        min_height = 400
+        if new_height < min_height:
+            new_height = min_height
+        
+        # Get current width
+        current_width = self.winfo_width()
+        if current_width < 400:  # Ensure minimum width
+            current_width = 400
+        
+        # Update window geometry
+        self.geometry(f"{current_width}x{new_height}")
+        
+        logger.info(f"Auto-adjusted window size to {current_width}x{new_height}")
 
     def add_custom_action(self):
         """Add a new custom resize action."""
@@ -166,6 +200,8 @@ class WindowManagerApp(tk.Tk):
             self.tree.insert('', 'end', values=(percentage, hotkey))
             self._register_custom_hotkey(percentage, hotkey)
             self.save_settings()
+            # Adjust window size after adding new action
+            self.after_idle(self._auto_adjust_window_size)
 
     def remove_custom_action(self):
         """Remove the selected custom resize action."""
@@ -177,6 +213,8 @@ class WindowManagerApp(tk.Tk):
             self._unregister_hotkey(hotkey)
             self.tree.delete(item)
             self.save_settings()
+            # Adjust window size after removing action
+            self.after_idle(self._auto_adjust_window_size)
 
     def _register_hotkeys(self):
         """Register all hotkeys."""
@@ -495,6 +533,14 @@ class WindowManagerApp(tk.Tk):
         draw.rectangle((0, 0, 64, 64), fill=(255, 255, 255))
         draw.text((10, 20), 'WM', fill=(0, 0, 0))
         return image
+
+    def on_window_minimize(self, event):
+        """Handle window minimize event - automatically minimize to tray."""
+        if event.widget == self:
+            # Check if the window is being minimized (iconified)
+            if self.state() == 'iconic':
+                # Delay the tray minimization slightly to ensure the window state change completes
+                self.after(100, self.minimize_to_tray)
 
     def on_exit(self):
         """Handle application exit."""
