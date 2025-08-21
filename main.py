@@ -71,6 +71,7 @@ class WindowManagerApp(tk.Tk):
         self.startup_var = tk.BooleanVar()
         self.minimize_sequence_started = False
         self.minimize_sequence_start_time = 0
+        self.resize_increment = 10  # Default resize increment in pixels
 
     def _setup_ui(self):
         """Set up UI components and load settings."""
@@ -95,7 +96,8 @@ class WindowManagerApp(tk.Tk):
 
         self.shortcuts_entries = {}
         shortcuts = [("Resize to 80%", "resize_80"), ("Fullscreen", "fullscreen"),
-                     ("Center Window", "center"), ("Resize to 60%", "resize_60")]
+                     ("Center Window", "center"), ("Resize to 60%", "resize_60"),
+                     ("Expand Window", "expand_window"), ("Shrink Window", "shrink_window")]
 
         for idx, (label_text, key) in enumerate(shortcuts):
             ttk.Label(shortcut_frame, text=f"{label_text}:").grid(row=idx, column=0, sticky="w")
@@ -103,9 +105,15 @@ class WindowManagerApp(tk.Tk):
             entry.grid(row=idx, column=1)
             self.shortcuts_entries[key] = entry
 
+        # Resize Increment Configuration
+        ttk.Label(shortcut_frame, text="Resize Increment (px):").grid(row=len(shortcuts), column=0, sticky="w")
+        self.increment_var = tk.IntVar(value=10)
+        self.increment_spinbox = ttk.Spinbox(shortcut_frame, from_=5, to=150, textvariable=self.increment_var, width=10)
+        self.increment_spinbox.grid(row=len(shortcuts), column=1, sticky="w")
+
         # Save Button
         self.save_button = ttk.Button(shortcut_frame, text="Save Hotkeys", command=self.save_settings)
-        self.save_button.grid(row=len(shortcuts), column=0, columnspan=2, pady=5)
+        self.save_button.grid(row=len(shortcuts)+1, column=0, columnspan=2, pady=5)
 
         # Custom Resize Actions Section
         custom_frame = ttk.LabelFrame(self, text="Custom Resize Actions")
@@ -167,7 +175,9 @@ class WindowManagerApp(tk.Tk):
             'resize_80': self.resize_to_80,
             'fullscreen': self.fullscreen,
             'center': self.center_window,
-            'resize_60': self.resize_to_60
+            'resize_60': self.resize_to_60,
+            'expand_window': self.expand_window,
+            'shrink_window': self.shrink_window
         }
 
         for key, action in actions.items():
@@ -281,6 +291,57 @@ class WindowManagerApp(tk.Tk):
             win32gui.SetWindowPos(hwnd, None, left, top, window_width, window_height, win32con.SWP_NOZORDER)
             logger.info(f"Centered window {hwnd} at ({left}, {top})")
 
+    def expand_window(self):
+        """Expand the foreground window by the configured increment on all sides."""
+        hwnd = self._get_foreground_window()
+        if hwnd:
+            self._adjust_window_size(hwnd, self.resize_increment)
+
+    def shrink_window(self):
+        """Shrink the foreground window by the configured increment on all sides."""
+        hwnd = self._get_foreground_window()
+        if hwnd:
+            self._adjust_window_size(hwnd, -self.resize_increment)
+
+    def _adjust_window_size(self, hwnd: int, increment: int):
+        """Adjust the window size by the given increment on all sides."""
+        rect = win32gui.GetWindowRect(hwnd)
+        current_left, current_top, current_right, current_bottom = rect
+        
+        # Calculate new dimensions (expand/shrink by increment on all sides)
+        new_left = current_left - increment
+        new_top = current_top - increment
+        new_width = (current_right - current_left) + (2 * increment)
+        new_height = (current_bottom - current_top) + (2 * increment)
+        
+        # Get monitor info to ensure window stays within bounds
+        monitor_info = self._get_monitor_info(hwnd)
+        work_area = monitor_info['Work']
+        
+        # Ensure minimum window size (prevent windows from becoming too small)
+        min_width, min_height = 100, 100
+        if new_width < min_width:
+            new_width = min_width
+            new_left = current_left - (new_width - (current_right - current_left)) // 2
+        if new_height < min_height:
+            new_height = min_height
+            new_top = current_top - (new_height - (current_bottom - current_top)) // 2
+        
+        # Ensure window doesn't go outside work area
+        if new_left < work_area[0]:
+            new_left = work_area[0]
+        if new_top < work_area[1]:
+            new_top = work_area[1]
+        if new_left + new_width > work_area[2]:
+            new_left = work_area[2] - new_width
+        if new_top + new_height > work_area[3]:
+            new_top = work_area[3] - new_height
+        
+        # Apply the new position and size
+        win32gui.SetWindowPos(hwnd, None, new_left, new_top, new_width, new_height, win32con.SWP_NOZORDER)
+        action = "Expanded" if increment > 0 else "Shrunk"
+        logger.info(f"{action} window {hwnd} by {abs(increment)}px to {new_width}x{new_height} at ({new_left}, {new_top})")
+
     def minimize_to_tray(self):
         """Minimize the application window to the system tray."""
         self.withdraw()
@@ -352,10 +413,14 @@ class WindowManagerApp(tk.Tk):
             key: entry.get() for key, entry in self.shortcuts_entries.items()
         }
         settings['startup'] = self.startup_var.get()
+        settings['resize_increment'] = self.increment_var.get()
         settings['custom_actions'] = [
             {'percentage': percentage, 'hotkey': hotkey}
             for percentage, hotkey in (self.tree.item(item, 'values') for item in self.tree.get_children())
         ]
+
+        # Update the resize increment value
+        self.resize_increment = self.increment_var.get()
 
         with open('settings.json', 'w') as f:
             json.dump(settings, f)
@@ -398,6 +463,11 @@ class WindowManagerApp(tk.Tk):
             entry.insert(0, hotkey)
 
         self.startup_var.set(settings.get('startup', False))
+        
+        # Load resize increment setting
+        resize_increment = settings.get('resize_increment', 10)
+        self.increment_var.set(resize_increment)
+        self.resize_increment = resize_increment
 
         # Load custom actions
         for action in settings.get('custom_actions', []):
