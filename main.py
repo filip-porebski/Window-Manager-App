@@ -13,7 +13,7 @@ import keyboard
 import win32gui
 import win32con
 import win32api
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageTk
 import pystray
 
 logging.basicConfig(
@@ -67,10 +67,13 @@ class WindowManagerApp(tk.Tk):
 
     def _initialize_window(self):
         """Configure initial window properties."""
-        self.title("Window Manager App")
+        self.title("Window Manager")
         # Set initial size but allow dynamic resizing
-        self.geometry("400x550")
-        self.minsize(400, 400)  # Set minimum size
+        self.geometry("840x650")
+        self.minsize(760, 580)  # Set minimum size
+        # Set app icon for all windows (main + dialogs)
+        self._app_icon = ImageTk.PhotoImage(self._create_tray_icon_image())
+        self.iconphoto(True, self._app_icon)
         self.hwnd = self.winfo_id()
 
     def _initialize_state_variables(self):
@@ -88,6 +91,7 @@ class WindowManagerApp(tk.Tk):
 
     def _setup_ui(self):
         """Set up UI components and load settings."""
+        self._setup_styles()
         self._create_widgets()
         self._load_settings()
         self._register_hotkeys()
@@ -104,11 +108,178 @@ class WindowManagerApp(tk.Tk):
         self.withdraw()
         self.minimize_to_tray()
 
+    def _setup_styles(self):
+        """Configure a polished ttk theme for the application."""
+        self.palette = {
+            "bg": "#eef3f8",
+            "surface": "#ffffff",
+            "surface_alt": "#f8fafc",
+            "border": "#d9e2ec",
+            "text": "#102033",
+            "muted": "#64748b",
+            "primary": "#2563eb",
+            "primary_hover": "#1d4ed8",
+            "primary_pressed": "#1e40af",
+            "accent": "#0f766e",
+            "danger": "#b91c1c",
+            "selection": "#dbeafe",
+        }
+
+        self.configure(bg=self.palette["bg"])
+        self.style = ttk.Style(self)
+        try:
+            self.style.theme_use("clam")
+        except tk.TclError:
+            logger.warning("Failed to apply clam theme; using default ttk theme.")
+
+        self.option_add("*Font", ("Segoe UI", 10))
+        self.option_add("*TCombobox*Listbox.font", ("Segoe UI", 10))
+
+        self.style.configure(".", font=("Segoe UI", 10), background=self.palette["bg"], foreground=self.palette["text"])
+        self.style.configure("App.TFrame", background=self.palette["bg"])
+        self.style.configure("Card.TFrame", background=self.palette["surface"], borderwidth=1, relief="solid")
+        self.style.configure("CardInner.TFrame", background=self.palette["surface"])
+        self.style.configure("Toolbar.TFrame", background=self.palette["surface"])
+        self.style.configure("Title.TLabel", background=self.palette["bg"], foreground=self.palette["text"], font=("Segoe UI Semibold", 22))
+        self.style.configure("Subtitle.TLabel", background=self.palette["bg"], foreground=self.palette["muted"], font=("Segoe UI", 10))
+        self.style.configure("SectionTitle.TLabel", background=self.palette["surface"], foreground=self.palette["text"], font=("Segoe UI Semibold", 12))
+        self.style.configure("SectionHint.TLabel", background=self.palette["surface"], foreground=self.palette["muted"], font=("Segoe UI", 9))
+        self.style.configure("Field.TLabel", background=self.palette["surface"], foreground=self.palette["text"], font=("Segoe UI", 10))
+        self.style.configure("Hint.TLabel", background=self.palette["surface"], foreground=self.palette["muted"], font=("Segoe UI", 9))
+        self.style.configure("Pill.TLabel", background="#e0f2fe", foreground="#075985", font=("Segoe UI Semibold", 9), padding=(10, 5))
+
+        self.style.configure(
+            "TEntry",
+            fieldbackground=self.palette["surface_alt"],
+            foreground=self.palette["text"],
+            bordercolor=self.palette["border"],
+            lightcolor=self.palette["border"],
+            darkcolor=self.palette["border"],
+            padding=6,
+        )
+        self.style.configure(
+            "TSpinbox",
+            fieldbackground=self.palette["surface_alt"],
+            foreground=self.palette["text"],
+            bordercolor=self.palette["border"],
+            lightcolor=self.palette["border"],
+            darkcolor=self.palette["border"],
+            arrowsize=14,
+            padding=5,
+        )
+        self.style.configure("TCheckbutton", background=self.palette["surface"], foreground=self.palette["text"], font=("Segoe UI", 10))
+        self.style.map("TCheckbutton", background=[("active", self.palette["surface"])])
+
+        self.style.configure(
+            "Primary.TButton",
+            background=self.palette["primary"],
+            foreground="#ffffff",
+            bordercolor=self.palette["primary"],
+            focusthickness=1,
+            focuscolor=self.palette["primary"],
+            font=("Segoe UI Semibold", 10),
+            padding=(14, 8),
+        )
+        self.style.map(
+            "Primary.TButton",
+            background=[("pressed", self.palette["primary_pressed"]), ("active", self.palette["primary_hover"])],
+            bordercolor=[("pressed", self.palette["primary_pressed"]), ("active", self.palette["primary_hover"])],
+            foreground=[("disabled", "#e5e7eb"), ("!disabled", "#ffffff")],
+        )
+        self.style.configure(
+            "Secondary.TButton",
+            background=self.palette["surface_alt"],
+            foreground=self.palette["text"],
+            bordercolor=self.palette["border"],
+            font=("Segoe UI Semibold", 10),
+            padding=(12, 8),
+        )
+        self.style.map(
+            "Secondary.TButton",
+            background=[("pressed", "#e2e8f0"), ("active", "#edf2f7")],
+            bordercolor=[("pressed", "#cbd5e1"), ("active", "#cbd5e1")],
+        )
+        self.style.configure(
+            "Compact.TButton",
+            background=self.palette["surface_alt"],
+            foreground=self.palette["text"],
+            bordercolor=self.palette["border"],
+            font=("Segoe UI Semibold", 9),
+            padding=(8, 6),
+        )
+        self.style.map(
+            "Compact.TButton",
+            background=[("pressed", "#e2e8f0"), ("active", "#edf2f7")],
+            bordercolor=[("pressed", "#cbd5e1"), ("active", "#cbd5e1")],
+        )
+        self.style.configure(
+            "Danger.TButton",
+            background="#fff1f2",
+            foreground=self.palette["danger"],
+            bordercolor="#fecdd3",
+            font=("Segoe UI Semibold", 10),
+            padding=(12, 8),
+        )
+        self.style.map(
+            "Danger.TButton",
+            background=[("pressed", "#ffe4e6"), ("active", "#ffe4e6")],
+            bordercolor=[("pressed", "#fda4af"), ("active", "#fda4af")],
+        )
+
+        self.style.configure(
+            "Treeview",
+            background=self.palette["surface"],
+            fieldbackground=self.palette["surface"],
+            foreground=self.palette["text"],
+            bordercolor=self.palette["border"],
+            rowheight=30,
+            font=("Segoe UI", 10),
+        )
+        self.style.configure(
+            "Treeview.Heading",
+            background=self.palette["surface_alt"],
+            foreground=self.palette["muted"],
+            bordercolor=self.palette["border"],
+            font=("Segoe UI Semibold", 9),
+            padding=(8, 6),
+        )
+        self.style.map("Treeview", background=[("selected", self.palette["selection"])], foreground=[("selected", self.palette["text"])])
+        self.style.configure("Horizontal.TScale", background=self.palette["surface"], troughcolor=self.palette["border"])
+
     def _create_widgets(self):
         """Create GUI widgets."""
+        outer_frame = ttk.Frame(self, style="App.TFrame", padding=(24, 22, 24, 18))
+        outer_frame.pack(fill="both", expand=True)
+        outer_frame.columnconfigure(0, weight=1)
+        outer_frame.rowconfigure(1, weight=1)
+
+        header_frame = ttk.Frame(outer_frame, style="App.TFrame")
+        header_frame.grid(row=0, column=0, sticky="ew", pady=(0, 18))
+        header_frame.columnconfigure(0, weight=1)
+
+        ttk.Label(header_frame, text="Window Manager", style="Title.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(header_frame, text="Global hotkeys for resizing, centering, and managing active windows.", style="Subtitle.TLabel").grid(row=1, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(header_frame, text="Tray utility", style="Pill.TLabel").grid(row=0, column=1, rowspan=2, sticky="ne", padx=(12, 0))
+
+        content_frame = ttk.Frame(outer_frame, style="App.TFrame")
+        content_frame.grid(row=1, column=0, sticky="nsew")
+        content_frame.columnconfigure(0, weight=1, minsize=390)
+        content_frame.columnconfigure(1, weight=1, minsize=320)
+        content_frame.rowconfigure(0, weight=1)
+        content_frame.rowconfigure(1, weight=0)
+
         # Keyboard Shortcuts Section
-        shortcut_frame = ttk.LabelFrame(self, text="Keyboard Shortcuts")
-        shortcut_frame.pack(padx=10, pady=10, fill="x")
+        shortcut_frame = ttk.Frame(content_frame, style="Card.TFrame", padding=(20, 16, 20, 18))
+        shortcut_frame.grid(row=0, column=0, rowspan=2, sticky="nsew", padx=(0, 16))
+        shortcut_frame.columnconfigure(1, weight=1)
+        shortcut_frame.columnconfigure(2, weight=0)
+
+        ttk.Label(shortcut_frame, text="Keyboard Shortcuts", style="SectionTitle.TLabel").grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Label(
+            shortcut_frame,
+            text="Assign hotkey combinations for the built-in window actions.",
+            style="SectionHint.TLabel",
+        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(4, 14))
 
         self.shortcuts_entries = {}
         shortcuts = [("Resize to 80%", "resize_80"), ("Fullscreen", "fullscreen"),
@@ -116,53 +287,148 @@ class WindowManagerApp(tk.Tk):
                      ("Expand Window", "expand_window"), ("Shrink Window", "shrink_window")]
 
         for idx, (label_text, key) in enumerate(shortcuts):
-            ttk.Label(shortcut_frame, text=f"{label_text}:").grid(row=idx, column=0, sticky="w")
-            entry = ttk.Entry(shortcut_frame)
-            entry.grid(row=idx, column=1)
+            row = idx + 2
+            ttk.Label(shortcut_frame, text=f"{label_text}:", style="Field.TLabel").grid(row=row, column=0, sticky="w", pady=5, padx=(0, 18))
+            entry = ttk.Entry(shortcut_frame, width=28)
+            entry.grid(row=row, column=1, sticky="ew", pady=5)
+            record_button = ttk.Button(
+                shortcut_frame,
+                text="Record",
+                style="Compact.TButton",
+                command=lambda shortcut_entry=entry, action_name=label_text: self.record_shortcut(shortcut_entry, action_name),
+            )
+            record_button.grid(row=row, column=2, sticky="e", padx=(8, 0), pady=5)
             self.shortcuts_entries[key] = entry
 
         # Resize Increment Configuration
-        ttk.Label(shortcut_frame, text="Resize Increment (px):").grid(row=len(shortcuts), column=0, sticky="w")
+        increment_row = len(shortcuts) + 2
+        ttk.Label(shortcut_frame, text="Resize Increment (px):", style="Field.TLabel").grid(row=increment_row, column=0, sticky="w", pady=(10, 5), padx=(0, 18))
         self.increment_var = tk.IntVar(value=10)
-        self.increment_spinbox = ttk.Spinbox(shortcut_frame, from_=5, to=150, textvariable=self.increment_var, width=10)
-        self.increment_spinbox.grid(row=len(shortcuts), column=1, sticky="w")
+        increment_input_frame = ttk.Frame(shortcut_frame, style="CardInner.TFrame")
+        increment_input_frame.grid(row=increment_row, column=1, columnspan=2, sticky="ew", pady=(10, 5))
+        increment_input_frame.columnconfigure(1, weight=1)
+        self.increment_spinbox = ttk.Spinbox(increment_input_frame, from_=5, to=150, textvariable=self.increment_var, width=8, command=self._on_increment_spinbox_changed)
+        self.increment_spinbox.grid(row=0, column=0, sticky="w", padx=(0, 12))
+        self._increment_scale_var = tk.DoubleVar(value=10)
+        self.increment_scale = ttk.Scale(
+            increment_input_frame,
+            from_=5,
+            to=150,
+            orient="horizontal",
+            variable=self._increment_scale_var,
+            command=self._on_increment_scale_changed,
+            style="Horizontal.TScale",
+        )
+        self.increment_scale.grid(row=0, column=1, sticky="ew")
+        ttk.Label(
+            shortcut_frame,
+            text="Controls how far Expand Window and Shrink Window move each edge.",
+            style="Hint.TLabel",
+        ).grid(row=increment_row + 1, column=1, columnspan=2, sticky="w", pady=(0, 10))
 
         # Save Button
         self.save_button = ttk.Button(shortcut_frame, text="Save Hotkeys", command=self.save_settings)
-        self.save_button.grid(row=len(shortcuts)+1, column=0, columnspan=2, pady=5)
+        self.save_button.configure(style="Primary.TButton")
+        self.save_button.grid(row=increment_row + 2, column=0, columnspan=3, sticky="ew", pady=(4, 0))
 
         # Custom Resize Actions Section
-        custom_frame = ttk.LabelFrame(self, text="Custom Resize Actions")
-        custom_frame.pack(padx=10, pady=10, fill="both", expand=True)
+        custom_frame = ttk.Frame(content_frame, style="Card.TFrame", padding=(20, 16, 20, 18))
+        custom_frame.grid(row=0, column=1, sticky="nsew", pady=(0, 16))
+        custom_frame.columnconfigure(0, weight=1)
+        custom_frame.rowconfigure(2, weight=1)
+
+        custom_header = ttk.Frame(custom_frame, style="Toolbar.TFrame")
+        custom_header.grid(row=0, column=0, sticky="ew")
+        custom_header.columnconfigure(0, weight=1)
+        ttk.Label(custom_header, text="Custom Resize Actions", style="SectionTitle.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            custom_frame,
+            text="Create additional resize percentages with dedicated hotkeys.",
+            style="SectionHint.TLabel",
+        ).grid(row=1, column=0, sticky="w", pady=(4, 12))
 
         # Treeview to display custom actions
+        table_frame = ttk.Frame(custom_frame, style="CardInner.TFrame")
+        table_frame.grid(row=2, column=0, sticky="nsew")
+        table_frame.columnconfigure(0, weight=1)
+        table_frame.rowconfigure(0, weight=1)
+
         columns = ('Percentage', 'Hotkey')
-        self.tree = ttk.Treeview(custom_frame, columns=columns, show='headings')
-        for col in columns:
-            self.tree.heading(col, text=col)
-        self.tree.pack(fill='both', expand=True)
+        self.tree = ttk.Treeview(table_frame, columns=columns, show='headings', selectmode='browse', height=6)
+        self.tree.heading('Percentage', text='Percentage')
+        self.tree.heading('Hotkey', text='Hotkey')
+        self.tree.column('Percentage', width=90, minwidth=80, anchor='center', stretch=False)
+        self.tree.column('Hotkey', width=200, minwidth=120, anchor='w', stretch=True)
+        self.tree.grid(row=0, column=0, sticky='nsew')
+
+        tree_scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
+        tree_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.tree.configure(yscrollcommand=tree_scrollbar.set)
 
         # Buttons to add and remove custom actions
-        btn_frame = ttk.Frame(custom_frame)
-        btn_frame.pack(fill='x')
+        btn_frame = ttk.Frame(custom_frame, style="Toolbar.TFrame")
+        btn_frame.grid(row=3, column=0, sticky='ew', pady=(12, 0))
+        btn_frame.columnconfigure(2, weight=1)
 
         self.add_button = ttk.Button(btn_frame, text="Add", command=self.add_custom_action)
-        self.add_button.pack(side='left', padx=5, pady=5)
+        self.add_button.configure(style="Secondary.TButton")
+        self.add_button.grid(row=0, column=0, sticky='w')
 
         self.remove_button = ttk.Button(btn_frame, text="Remove", command=self.remove_custom_action)
-        self.remove_button.pack(side='left', padx=5, pady=5)
+        self.remove_button.configure(style="Danger.TButton")
+        self.remove_button.grid(row=0, column=1, sticky='w', padx=(10, 0))
+
+        # System controls
+        system_frame = ttk.Frame(content_frame, style="Card.TFrame", padding=(20, 16, 20, 16))
+        system_frame.grid(row=1, column=1, sticky="ew")
+        system_frame.columnconfigure(0, weight=1)
+
+        ttk.Label(system_frame, text="System", style="SectionTitle.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(system_frame, text="Control background behavior and startup integration.", style="SectionHint.TLabel").grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 12))
 
         # Start with Windows Checkbox
-        self.startup_check = ttk.Checkbutton(self, text="Start with Windows", variable=self.startup_var,
+        self.startup_check = ttk.Checkbutton(system_frame, text="Start with Windows", variable=self.startup_var,
                                              command=self.on_startup_checkbox)
-        self.startup_check.pack(pady=5)
+        self.startup_check.grid(row=2, column=0, sticky="w", pady=(0, 2))
 
         # Minimize to Tray Button
-        self.minimize_button = ttk.Button(self, text="Minimize to Tray", command=self.minimize_to_tray)
-        self.minimize_button.pack(pady=5)
+        self.minimize_button = ttk.Button(system_frame, text="Minimize to Tray", command=self.minimize_to_tray)
+        self.minimize_button.configure(style="Secondary.TButton")
+        self.minimize_button.grid(row=2, column=1, sticky="e", padx=(14, 0))
         
         # Auto-adjust window size after all widgets are created
         self.after_idle(self._auto_adjust_window_size)
+
+    def record_shortcut(self, entry: ttk.Entry, action_name: str, save_after_record: bool = True):
+        """Record a hotkey and write it into the provided entry field."""
+        self._unregister_all_hotkeys()
+        dialog = ShortcutRecorderDialog(self, action_name)
+        self.wait_window(dialog)
+        if dialog.result:
+            entry.delete(0, tk.END)
+            entry.insert(0, dialog.result)
+            if save_after_record:
+                self.save_settings()
+                return
+        self._register_hotkeys()
+
+    def _on_increment_scale_changed(self, value: str):
+        """Keep the resize increment slider on whole-pixel values."""
+        try:
+            rounded_value = int(round(float(value)))
+        except (TypeError, ValueError):
+            return
+        self.increment_var.set(rounded_value)
+
+    def _on_increment_spinbox_changed(self):
+        """Clamp manual resize increment edits to the supported range."""
+        try:
+            value = int(round(float(self.increment_var.get())))
+        except (tk.TclError, ValueError):
+            value = self.resize_increment
+        clamped = min(150, max(5, value))
+        self.increment_var.set(clamped)
+        self._increment_scale_var.set(clamped)
 
     def _auto_adjust_window_size(self):
         """Automatically adjust window size to fit all widgets."""
@@ -173,18 +439,19 @@ class WindowManagerApp(tk.Tk):
         required_height = self.winfo_reqheight()
         
         # Add some padding for better appearance
-        padding = 40
+        padding = 28
         new_height = required_height + padding
         
         # Ensure minimum height
-        min_height = 400
-        if new_height < min_height:
-            new_height = min_height
+        min_height = 580
+        new_height = max(new_height, min_height)
+        max_height = max(min_height, min(760, self.winfo_screenheight() - 96))
+        new_height = min(new_height, max_height)
         
         # Get current width
         current_width = self.winfo_width()
-        if current_width < 400:  # Ensure minimum width
-            current_width = 400
+        if current_width < 840:  # Ensure minimum width
+            current_width = 840
         
         # Update window geometry
         self.geometry(f"{current_width}x{new_height}")
@@ -528,10 +795,12 @@ class WindowManagerApp(tk.Tk):
 
     def _create_tray_icon_image(self) -> Image.Image:
         """Create an image for the system tray icon."""
-        image = Image.new('RGB', (64, 64), color=(255, 255, 255))
+        image = Image.new('RGBA', (64, 64), color=(0, 0, 0, 0))
         draw = ImageDraw.Draw(image)
-        draw.rectangle((0, 0, 64, 64), fill=(255, 255, 255))
-        draw.text((10, 20), 'WM', fill=(0, 0, 0))
+        draw.rounded_rectangle((6, 6, 58, 58), radius=14, fill=(37, 99, 235, 255))
+        draw.rounded_rectangle((14, 17, 50, 44), radius=4, outline=(255, 255, 255, 235), width=3)
+        draw.line((14, 26, 50, 26), fill=(255, 255, 255, 200), width=2)
+        draw.line((29, 26, 29, 44), fill=(255, 255, 255, 180), width=2)
         return image
 
     def on_window_minimize(self, event):
@@ -579,18 +848,19 @@ class WindowManagerApp(tk.Tk):
 
     def save_settings(self):
         """Save the current settings to a JSON file."""
+        self._on_increment_spinbox_changed()
         settings = {
             key: entry.get() for key, entry in self.shortcuts_entries.items()
         }
         settings['startup'] = self.startup_var.get()
-        settings['resize_increment'] = self.increment_var.get()
+        settings['resize_increment'] = int(round(self.increment_var.get()))
         settings['custom_actions'] = [
             {'percentage': percentage, 'hotkey': hotkey}
             for percentage, hotkey in (self.tree.item(item, 'values') for item in self.tree.get_children())
         ]
 
         # Update the resize increment value
-        self.resize_increment = self.increment_var.get()
+        self.resize_increment = int(round(self.increment_var.get()))
 
         with open('settings.json', 'w') as f:
             json.dump(settings, f)
@@ -635,8 +905,9 @@ class WindowManagerApp(tk.Tk):
         self.startup_var.set(settings.get('startup', False))
         
         # Load resize increment setting
-        resize_increment = settings.get('resize_increment', 10)
+        resize_increment = int(round(float(settings.get('resize_increment', 10))))
         self.increment_var.set(resize_increment)
+        self._increment_scale_var.set(resize_increment)
         self.resize_increment = resize_increment
 
         # Load custom actions
@@ -684,36 +955,222 @@ class WindowManagerApp(tk.Tk):
         win32gui.EnumWindows(enum_handler, None)
         logger.info("Minimized all windows on current desktop.")
 
+class ShortcutRecorderDialog(tk.Toplevel):
+    """Dialog that records the next keyboard shortcut entered by the user."""
+
+    MODIFIER_KEYSYMS = {
+        "Shift_L",
+        "Shift_R",
+        "Control_L",
+        "Control_R",
+        "Alt_L",
+        "Alt_R",
+        "Meta_L",
+        "Meta_R",
+        "Win_L",
+        "Win_R",
+    }
+    KEY_NAME_MAP = {
+        "Control_L": "ctrl",
+        "Control_R": "ctrl",
+        "Shift_L": "shift",
+        "Shift_R": "shift",
+        "Alt_L": "alt",
+        "Alt_R": "alt",
+        "Meta_L": "windows",
+        "Meta_R": "windows",
+        "Win_L": "windows",
+        "Win_R": "windows",
+        "Return": "enter",
+        "Escape": "esc",
+        "BackSpace": "backspace",
+        "Tab": "tab",
+        "space": "space",
+        "Delete": "delete",
+        "Insert": "insert",
+        "Home": "home",
+        "End": "end",
+        "Prior": "page up",
+        "Next": "page down",
+        "Up": "up",
+        "Down": "down",
+        "Left": "left",
+        "Right": "right",
+        "minus": "minus",
+        "equal": "equal",
+        "comma": "comma",
+        "period": "period",
+        "slash": "slash",
+        "backslash": "backslash",
+        "semicolon": "semicolon",
+        "apostrophe": "apostrophe",
+        "grave": "grave",
+        "bracketleft": "left bracket",
+        "bracketright": "right bracket",
+    }
+
+    def __init__(self, parent: WindowManagerApp, action_name: str):
+        super().__init__(parent)
+        self.parent = parent
+        self.result: Optional[str] = None
+        self.title("Record Shortcut")
+        self.configure(bg=parent.palette["bg"])
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self.on_cancel)
+        self._create_widgets(action_name)
+        self.bind("<KeyPress>", self._on_key_press)
+        self.after_idle(lambda: self._center_on_parent(parent))
+        self.after(100, self.focus_force)
+
+    def _create_widgets(self, action_name: str):
+        """Create recorder dialog controls."""
+        container = ttk.Frame(self, style="Card.TFrame", padding=(22, 20, 22, 18))
+        container.pack(fill="both", expand=True, padx=18, pady=18)
+        container.columnconfigure(0, weight=1)
+
+        ttk.Label(container, text=f"Record {action_name}", style="SectionTitle.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            container,
+            text="Press the shortcut now. Use Esc to cancel.",
+            style="SectionHint.TLabel",
+        ).grid(row=1, column=0, sticky="w", pady=(4, 16))
+
+        self.preview_label = ttk.Label(container, text="Waiting for keys...", style="Pill.TLabel")
+        self.preview_label.grid(row=2, column=0, sticky="ew", pady=(0, 18))
+
+        cancel_button = ttk.Button(container, text="Cancel", command=self.on_cancel, style="Secondary.TButton")
+        cancel_button.grid(row=3, column=0, sticky="e")
+
+    def _on_key_press(self, event: tk.Event):
+        """Convert the pressed combination into keyboard module syntax."""
+        if event.keysym == "Escape":
+            self.on_cancel()
+            return "break"
+
+        hotkey = self._format_event_hotkey(event)
+        if hotkey:
+            self.result = hotkey
+            self.preview_label.configure(text=hotkey)
+            self.after(120, self.destroy)
+        return "break"
+
+    def _format_event_hotkey(self, event: tk.Event) -> str:
+        """Format a Tk key event as a keyboard-library hotkey string."""
+        key = self._normalize_key_name(event.keysym)
+        if not key:
+            return ""
+
+        modifiers = []
+        if event.state & 0x0004:
+            modifiers.append("ctrl")
+        if event.state & 0x0001:
+            modifiers.append("shift")
+        if event.state & 0x20000:
+            modifiers.append("alt")
+
+        if key in {"ctrl", "shift", "alt", "windows"}:
+            return ""
+        return "+".join([*modifiers, key])
+
+    def _normalize_key_name(self, keysym: str) -> str:
+        """Normalize Tk key names to names accepted by the keyboard package."""
+        if keysym in self.KEY_NAME_MAP:
+            return self.KEY_NAME_MAP[keysym]
+        if len(keysym) == 1:
+            return keysym.lower()
+        if keysym.startswith("F") and keysym[1:].isdigit():
+            return keysym.lower()
+        if keysym in self.MODIFIER_KEYSYMS:
+            return ""
+        return keysym.replace("_", " ").lower()
+
+    def _center_on_parent(self, parent: tk.Tk):
+        """Center the dialog over the parent window."""
+        self.update_idletasks()
+        parent.update_idletasks()
+        width = self.winfo_width()
+        height = self.winfo_height()
+        parent_x = parent.winfo_rootx()
+        parent_y = parent.winfo_rooty()
+        parent_width = parent.winfo_width()
+        parent_height = parent.winfo_height()
+        x = parent_x + (parent_width - width) // 2
+        y = parent_y + (parent_height - height) // 2
+        self.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+
+    def on_cancel(self):
+        """Cancel shortcut recording."""
+        self.result = None
+        self.destroy()
+
 class CustomActionDialog(tk.Toplevel):
     """Dialog for adding custom resize actions."""
 
-    def __init__(self, parent: tk.Tk):
+    def __init__(self, parent: WindowManagerApp):
         super().__init__(parent)
+        self.parent = parent
         self.title("Add Custom Action")
+        self.configure(bg=parent.palette["bg"])
+        self.resizable(False, False)
         self.result: Optional[Tuple[str, str]] = None
         self._create_widgets()
         self.transient(parent)
         self.grab_set()
         self.protocol("WM_DELETE_WINDOW", self.on_cancel)
+        self.after_idle(lambda: self._center_on_parent(parent))
 
     def _create_widgets(self):
         """Create widgets for the dialog."""
-        ttk.Label(self, text="Resize Percentage (e.g., 75):").grid(row=0, column=0, padx=10, pady=10)
-        self.percentage_entry = ttk.Entry(self)
-        self.percentage_entry.grid(row=0, column=1, padx=10, pady=10)
+        container = ttk.Frame(self, style="Card.TFrame", padding=(22, 20, 22, 18))
+        container.pack(fill="both", expand=True, padx=18, pady=18)
+        container.columnconfigure(1, weight=1)
 
-        ttk.Label(self, text="Hotkey (e.g., ctrl+alt+5):").grid(row=1, column=0, padx=10, pady=10)
-        self.hotkey_entry = ttk.Entry(self)
-        self.hotkey_entry.grid(row=1, column=1, padx=10, pady=10)
+        ttk.Label(container, text="Add Custom Action", style="SectionTitle.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(container, text="Define a resize percentage and the hotkey that triggers it.", style="SectionHint.TLabel").grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 16))
 
-        btn_frame = ttk.Frame(self)
-        btn_frame.grid(row=2, column=0, columnspan=2)
+        ttk.Label(container, text="Resize Percentage (e.g., 75):", style="Field.TLabel").grid(row=2, column=0, sticky="w", padx=(0, 16), pady=6)
+        self.percentage_entry = ttk.Entry(container, width=24)
+        self.percentage_entry.grid(row=2, column=1, sticky="ew", pady=6)
+
+        ttk.Label(container, text="Hotkey (e.g., ctrl+alt+5):", style="Field.TLabel").grid(row=3, column=0, sticky="w", padx=(0, 16), pady=6)
+        self.hotkey_entry = ttk.Entry(container, width=24)
+        self.hotkey_entry.grid(row=3, column=1, sticky="ew", pady=6)
+        record_button = ttk.Button(
+            container,
+            text="Record",
+            style="Compact.TButton",
+            command=lambda: self.parent.record_shortcut(self.hotkey_entry, "Custom Action", save_after_record=False),
+        )
+        record_button.grid(row=3, column=2, sticky="e", padx=(8, 0), pady=6)
+
+        btn_frame = ttk.Frame(container, style="Toolbar.TFrame")
+        btn_frame.grid(row=4, column=0, columnspan=3, sticky="e", pady=(18, 0))
 
         ok_button = ttk.Button(btn_frame, text="OK", command=self.on_ok)
-        ok_button.pack(side='left', padx=5, pady=5)
+        ok_button.configure(style="Primary.TButton")
+        ok_button.pack(side='left', padx=(0, 8))
 
         cancel_button = ttk.Button(btn_frame, text="Cancel", command=self.on_cancel)
-        cancel_button.pack(side='left', padx=5, pady=5)
+        cancel_button.configure(style="Secondary.TButton")
+        cancel_button.pack(side='left')
+
+        self.percentage_entry.focus_set()
+
+    def _center_on_parent(self, parent: tk.Tk):
+        """Center the dialog over the main window."""
+        self.update_idletasks()
+        parent.update_idletasks()
+        width = self.winfo_width()
+        height = self.winfo_height()
+        parent_x = parent.winfo_rootx()
+        parent_y = parent.winfo_rooty()
+        parent_width = parent.winfo_width()
+        parent_height = parent.winfo_height()
+        x = parent_x + (parent_width - width) // 2
+        y = parent_y + (parent_height - height) // 2
+        self.geometry(f"+{max(x, 0)}+{max(y, 0)}")
 
     def on_ok(self):
         """Handle the OK button press."""

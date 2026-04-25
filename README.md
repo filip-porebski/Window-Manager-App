@@ -1,130 +1,106 @@
+# Window Manager App
 
-# 🪟 Windows Manager App
+A lightweight tray utility for Windows that lets you resize, center, and manage application windows using global hotkeys.
 
-*Because I want to manage windows in Windows the way I like.*
+## Features
 
-This lightweight app lives quietly in your system tray, waiting to make your windows behave exactly how you want them to.
+- **Smart Resizing** - Snap windows to 80%, 60%, or any custom percentage of the screen
+- **Center Window** - Center any window on screen without changing its size
+- **Fullscreen** - Expand any window to fill the entire work area
+- **Expand / Shrink** - Grow or shrink windows by a configurable pixel increment on all sides
+- **Custom Hotkeys** - Assign your own keyboard shortcuts to every action
+- **Custom Resize Actions** - Define additional resize percentages with their own hotkeys
+- **Minimize All** - Minimize every window on the current desktop using a two-key sequence
+- **System Tray** - Runs silently in the background; restore from the tray at any time
+- **Start with Windows** - Optional auto-launch on login
+- **Hotkey Recovery** - Automatically detects and recovers broken hotkey registrations
 
-## ✨ What does it do
+## Screenshots
 
--   **🎯 Smart Resizing**: Snap windows to 80%, 60% or any custom percentage
--   **📍 Perfect Centering**: Center any window without changing its size
--   **🖥️ Instant Fullscreen**: Make any window take over your entire screen
--   **⚡ Expand/Shrink**: Grow or shrink windows pixel by pixel with configurable increments
--   **🎮 Custom Hotkeys**: Set up your own keyboard shortcuts
--   **🔧 Custom Actions**: Add as many resize percentages as you want
--   **💥 Nuclear Option**: Minimize ALL windows on your current desktop (for when you need a clean slate)
--   **🥷 Stealth Mode**: Runs silently in the system tray
--   **🚀 Auto-Start**: Launches with Windows so it's always ready
--   **🛡️ Self-Healing**: Automatically recovers if hotkeys stop working
+![Main window](https://i.imgur.com/KYUOG7d.png)
 
-## 📸 Screenshots
+![Hotkey recording](https://i.imgur.com/BehTtAP.png)
 
-![alt text](https://i.imgur.com/KYUOG7d.png)
+![Custom actions](https://i.imgur.com/JvAenjx.png)
 
-![alt text](https://i.imgur.com/BehTtAP.png)
+![System tray](https://i.imgur.com/PGxBUZt.png)
 
-![alt text](https://i.imgur.com/JvAenjx.png)
+## Getting Started
 
-![alt text](https://i.imgur.com/PGxBUZt.png)
+**Requirements**
 
-## 🚀 Getting Started
+- Windows
+- Python 3.7+ (if running from source)
 
-### What You Need
+**Run from source**
 
--   **Windows**
--   **Python 3.7+** if you're running from source ([grab it here](https://www.python.org/downloads/))
--   Or just use the `.exe` from Releases
-
-### Quick Setup
-
-**Option 1: The Python way**
 ```bash
-# Clone or download this repo
-# Navigate to the folder
 pip install -r requirements.txt
 python main.py
 ```
 
-**Option 2**
-- Grab the `.exe` from releases
-- Double-click it
-- Profit! 💰
+**Run the executable**
 
+Download the `.exe` from the Releases page and run it directly, no Python required.
 
-## 🎮 How to use
+## Usage
 
-### Finding the App
+### Opening the app
 
-Look for the "WM" icon in your system tray. Right-click it and hit **Restore** to bring up the main window.
+Find the icon in the system tray, right-click it, and select **Restore** to open the main window.
 
-### Setting up your hotkeys
+### Built-in actions
 
-The main window has everything you need:
+| Action | Description |
+|---|---|
+| Resize to 80% | Resize the active window to 80% of the work area |
+| Resize to 60% | Resize the active window to 60% of the work area |
+| Fullscreen | Expand the active window to fill the work area |
+| Center Window | Center the active window without resizing it |
+| Expand Window | Grow the active window by the resize increment on all sides |
+| Shrink Window | Shrink the active window by the resize increment on all sides |
 
-**Built-in Actions:**
-- **Resize to 80%**
-- **Resize to 60%**
-- **Fullscreen**
-- **Center Window**
-- **Expand Window**
-- **Shrink Window**
+### Resize increment
 
-**Pro Tips:**
-- Set your **Resize Increment** (5-150px) to control how much expand/shrink moves change your windows
-- Use the spinbox to dial in the perfect increment for your workflow
+The **Resize Increment** setting (5-150 px) controls how many pixels each Expand / Shrink action adds or removes per edge. Adjust it with the spinbox or slider in the Keyboard Shortcuts panel.
 
-**Custom Actions:**
-- Hit **Add** to create your own resize percentages
-- Want 73% window size? You got it!
-- Assign any hotkey combo you want
+### Custom resize actions
 
-**The Nuclear Option:**
-- `Ctrl + Shift + H` followed by `Ctrl + Shift + M` (within 2 seconds)
-- Minimizes ALL windows on your current desktop
+Click **Add** to define a resize percentage (e.g. 73) and assign a hotkey to it. The action appears in the Custom Resize Actions table and is registered immediately. Select a row and click **Remove** to delete it.
 
-### Going Stealth
+### Minimize all windows
 
-- Click **Minimize to Tray** to hide the window
-- Check **Start with Windows** if you want it to launch automatically
-- The app keeps working in the background
+Press `Ctrl + Shift + H` followed by `Ctrl + Shift + M` within 2 seconds to minimize every window on the current desktop.
 
-## 🔧 Seetings
+### Recording hotkeys
 
-All your settings get saved to `settings.json` in the app directory. It's got your hotkeys, custom actions, resize increment and startup preferences.
+Click **Record** next to any action, then press the desired key combination. The shortcut is saved automatically. Click **Save Hotkeys** to apply any manual edits made directly in the text fields.
 
-**What's in there:**
-- Your hotkey bindings
-- Custom resize actions and their hotkeys
-- Resize increment setting (how many pixels expand/shrink moves)
-- Whether to start with Windows
+## Settings
 
-You can edit `settings.json` manually if you want.
+All settings are persisted to `settings.json` in the application directory. The file stores hotkey bindings, custom resize actions, the resize increment, and the startup preference. It can be edited manually if needed.
 
-## 🛠️ Troubleshooting
+## Troubleshooting
 
-**Hotkeys stopped working?**
-- Right-click the tray icon and hit "Recover Hotkeys"
-- The app has self-healing powers and usually fixes itself
-- Check the tray icon - it shows how many hotkeys are active
+**Hotkeys not responding**
+- Right-click the tray icon and select **Recover Hotkeys**
+- The app monitors hotkey health in the background and will attempt automatic recovery
+- The tray tooltip shows how many hotkeys are currently active
 
-**App won't start?**
-- Make sure you have all the Python dependencies installed
-- Check `window_manager.log` for any error messages
-- Try running as administrator if you're having permission issues
+**App fails to start**
+- Ensure all Python dependencies are installed: `pip install -r requirements.txt`
+- Check `window_manager.log` for error details
+- Try running as administrator if hotkey registration fails
 
-**Window won't resize properly?**
-- Some apps (like fullscreen games) don't play nice with window management
-- Try it on a regular window first to make sure everything's working
+**Window does not resize**
+- Some applications (fullscreen games, UWP apps) block external window management
+- Test on a standard desktop window to verify the hotkeys are working
 
+## Built With
 
-
-This thing is built with:
-- **Python**
-- **tkinter** for the GUI
-- **keyboard** library for global hotkeys
-- **pywin32** for Windows API
-- **pystray** for system tray integration
-- **Pillow** for the tray icon
-
----
+- [Python](https://www.python.org/)
+- [tkinter](https://docs.python.org/3/library/tkinter.html) - GUI
+- [keyboard](https://github.com/boppreh/keyboard) - Global hotkeys
+- [pywin32](https://github.com/mhammond/pywin32) - Windows API access
+- [pystray](https://github.com/moses-palmer/pystray) - System tray integration
+- [Pillow](https://python-pillow.org/) - Tray icon rendering
