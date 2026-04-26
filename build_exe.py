@@ -8,7 +8,7 @@ from typing import List
 class BuildConfig:
     """Configuration settings for the build process."""
     APP_NAME = "windowmanagerapp"
-    VERSION = "1.0.2"
+    VERSION = "1.0.3"
     AUTHOR = "Filip Porebski"
     DESCRIPTION = "Window Manager Application"
     
