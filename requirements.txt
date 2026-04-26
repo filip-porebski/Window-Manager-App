@@ -1,5 +1,0 @@
-keyboard
-pywin32
-Pillow
-pystray
-pyinstaller
