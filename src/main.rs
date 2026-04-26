@@ -165,6 +165,7 @@ struct App {
     font_normal: HFONT,
     font_small: HFONT,
     font_bold: HFONT,
+    font_mono: HFONT,
     font_title: HFONT,
 }
 
@@ -182,12 +183,13 @@ impl App {
                 recording: None,
                 minimize_started: None,
                 tray_added: false,
-                bg_brush: CreateSolidBrush(rgb(0xee, 0xf3, 0xf8)),
+                bg_brush: CreateSolidBrush(rgb(0xc0, 0xc0, 0xc0)),
                 white_brush: CreateSolidBrush(rgb(0xff, 0xff, 0xff)),
-                font_normal: create_font(16, FW_NORMAL as i32),
-                font_small: create_font(14, FW_NORMAL as i32),
-                font_bold: create_font(16, 600),
-                font_title: create_font(30, 600),
+                font_normal: create_font(14, FW_NORMAL as i32),
+                font_small: create_font(13, FW_NORMAL as i32),
+                font_bold: create_font(14, 700),
+                font_mono: create_font_face(14, FW_NORMAL as i32, "Lucida Console"),
+                font_title: create_font(22, 700),
             }
         }
     }
@@ -220,8 +222,8 @@ impl App {
             WS_OVERLAPPEDWINDOW,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            860,
-            670,
+            790,
+            580,
             0 as HWND,
             0 as _,
             self.hinstance,
@@ -245,30 +247,28 @@ impl App {
         self.apply_settings_to_ui();
         self.register_hotkeys();
         self.add_tray_icon();
-        self.set_status(
-            "Running in the system tray. Use Restore from the tray menu to open this window.",
-        );
+        self.set_status("Ready. Shortcuts are active while the app is running.");
     }
 
     unsafe fn create_controls(&mut self) {
-        self.create_label("Window Manager", 24, 18, 420, 38, self.font_title);
+        self.create_label("Window Manager", 18, 14, 360, 26, self.font_title);
         self.create_label(
-            "Global hotkeys for resizing, centering, and managing active windows.",
-            25,
-            58,
-            560,
-            24,
+            "Resize, center, and manage windows with global shortcuts.",
+            19,
+            42,
+            460,
+            20,
             self.font_small,
         );
-        self.create_label("Tray utility", 724, 25, 100, 25, self.font_bold);
+        self.create_label("v1.1.0", 712, 22, 50, 20, self.font_bold);
 
-        self.create_group("Keyboard Shortcuts", 24, 92, 390, 485);
+        self.create_group("Shortcuts", 16, 76, 360, 390);
         self.create_label(
-            "Assign hotkey combinations for the built-in window actions.",
-            44,
-            122,
-            330,
-            22,
+            "Choose the key combinations for each action.",
+            34,
+            103,
+            300,
+            18,
             self.font_small,
         );
 
@@ -312,25 +312,25 @@ impl App {
         ];
 
         for (index, (label, key, edit_id, record_id)) in rows.iter().enumerate() {
-            let y = 154 + (index as i32 * 34);
-            self.create_label(label, 44, y + 4, 120, 23, self.font_normal);
-            let edit = self.create_edit("", *edit_id, 170, y, 150, 27);
+            let y = 130 + (index as i32 * 31);
+            self.create_label(label, 34, y + 5, 112, 20, self.font_normal);
+            let edit = self.create_edit("", *edit_id, 150, y, 136, 24);
             self.set_builtin_edit(*key, edit);
-            self.create_button("Record", *record_id, 329, y - 1, 64, 29);
+            self.create_button("Record", *record_id, 296, y - 1, 62, 26);
         }
 
-        self.create_label("Resize Increment (px):", 44, 365, 150, 23, self.font_normal);
-        self.controls.increment_edit = self.create_edit("", ID_INCREMENT_EDIT, 195, 361, 48, 27);
+        self.create_label("Resize Increment:", 34, 329, 124, 20, self.font_normal);
+        self.controls.increment_edit = self.create_edit("", ID_INCREMENT_EDIT, 150, 325, 45, 24);
         self.controls.increment_track = self.create_child(
             "msctls_trackbar32",
             "",
             WS_TABSTOP | TBS_AUTOTICKS,
             0,
             ID_INCREMENT_TRACK,
-            250,
-            358,
-            135,
-            34,
+            204,
+            322,
+            150,
+            32,
         );
         SendMessageW(
             self.controls.increment_track,
@@ -340,22 +340,22 @@ impl App {
         );
         SendMessageW(self.controls.increment_track, TBM_SETPOS, 1, 8);
         self.create_label(
-            "Controls how far Expand Window and Shrink Window move each edge.",
-            44,
-            394,
-            330,
-            38,
+            "Pixels moved per edge when expanding or shrinking.",
+            34,
+            360,
+            320,
+            18,
             self.font_small,
         );
-        self.create_button("Save Hotkeys", ID_SAVE, 44, 455, 350, 36);
+        self.create_button("Save Hotkeys", ID_SAVE, 34, 410, 322, 32);
 
-        self.create_group("Custom Resize Actions", 432, 92, 390, 288);
+        self.create_group("Custom Resizes", 392, 76, 370, 250);
         self.create_label(
-            "Create additional resize percentages with dedicated hotkeys.",
-            452,
-            122,
-            345,
-            22,
+            "Create extra resize percentages and shortcuts.",
+            410,
+            103,
+            322,
+            18,
             self.font_small,
         );
         self.controls.custom_list = self.create_child(
@@ -364,27 +364,27 @@ impl App {
             WS_BORDER | WS_VSCROLL | LBS_NOTIFY as u32,
             WS_EX_CLIENTEDGE,
             ID_CUSTOM_LIST,
-            452,
-            152,
-            345,
-            96,
+            410,
+            130,
+            328,
+            82,
         );
-        self.send_font(self.controls.custom_list, self.font_normal);
-        self.create_label("Percentage:", 452, 260, 88, 23, self.font_normal);
-        self.controls.custom_percent = self.create_edit("", ID_CUSTOM_PERCENT, 540, 256, 58, 27);
-        self.create_label("Hotkey:", 610, 260, 58, 23, self.font_normal);
-        self.controls.custom_hotkey = self.create_edit("", ID_CUSTOM_HOTKEY, 668, 256, 84, 27);
-        self.create_button("Record", ID_CUSTOM_RECORD, 756, 255, 58, 29);
-        self.create_button("Add", ID_CUSTOM_ADD, 452, 325, 76, 33);
-        self.create_button("Remove", ID_CUSTOM_REMOVE, 538, 325, 88, 33);
+        self.send_font(self.controls.custom_list, self.font_mono);
+        self.create_label("Percent:", 410, 225, 60, 20, self.font_normal);
+        self.controls.custom_percent = self.create_edit("", ID_CUSTOM_PERCENT, 470, 221, 48, 24);
+        self.create_label("Hotkey:", 530, 225, 54, 20, self.font_normal);
+        self.controls.custom_hotkey = self.create_edit("", ID_CUSTOM_HOTKEY, 582, 221, 86, 24);
+        self.create_button("Set", ID_CUSTOM_RECORD, 676, 220, 42, 26);
+        self.create_button("Add", ID_CUSTOM_ADD, 410, 278, 72, 28);
+        self.create_button("Remove", ID_CUSTOM_REMOVE, 492, 278, 82, 28);
 
-        self.create_group("System", 432, 405, 390, 125);
+        self.create_group("Options", 392, 340, 370, 126);
         self.create_label(
-            "Control background behavior and startup integration.",
-            452,
-            435,
-            330,
-            22,
+            "Control startup and background behavior.",
+            410,
+            367,
+            320,
+            18,
             self.font_small,
         );
         self.controls.startup_check = self.create_child(
@@ -393,15 +393,15 @@ impl App {
             BS_AUTOCHECKBOX as u32 | WS_TABSTOP,
             0,
             ID_STARTUP,
-            452,
-            470,
-            165,
-            28,
+            410,
+            399,
+            155,
+            24,
         );
         self.send_font(self.controls.startup_check, self.font_normal);
-        self.create_button("Minimize to Tray", ID_MINIMIZE, 670, 466, 128, 34);
+        self.create_button("Minimize to Tray", ID_MINIMIZE, 610, 395, 128, 30);
 
-        self.controls.status = self.create_label("", 24, 600, 800, 28, self.font_small);
+        self.controls.status = self.create_label("", 18, 500, 740, 22, self.font_small);
     }
 
     unsafe fn create_child(
@@ -1038,6 +1038,7 @@ impl App {
         DeleteObject(self.font_normal as _);
         DeleteObject(self.font_small as _);
         DeleteObject(self.font_bold as _);
+        DeleteObject(self.font_mono as _);
         DeleteObject(self.font_title as _);
     }
 }
@@ -1323,7 +1324,11 @@ fn wide(text: &str) -> Vec<u16> {
 }
 
 unsafe fn create_font(height: i32, weight: i32) -> HFONT {
-    let face = wide("Segoe UI");
+    create_font_face(height, weight, "Tahoma")
+}
+
+unsafe fn create_font_face(height: i32, weight: i32, face: &str) -> HFONT {
+    let face = wide(face);
     CreateFontW(
         -height,
         0,
@@ -1418,7 +1423,22 @@ unsafe extern "system" fn window_proc(
         WM_CTLCOLORSTATIC => {
             if let Some(app) = app {
                 SetBkMode(wparam as _, TRANSPARENT as i32);
-                SetTextColor(wparam as _, rgb(0x10, 0x20, 0x33));
+                SetTextColor(wparam as _, rgb(0x00, 0x00, 0x00));
+                return app.bg_brush as isize;
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
+            if let Some(app) = app {
+                SetBkMode(wparam as _, TRANSPARENT as i32);
+                SetTextColor(wparam as _, rgb(0x00, 0x00, 0x00));
+                return app.white_brush as isize;
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_CTLCOLORBTN => {
+            if let Some(app) = app {
+                SetBkMode(wparam as _, TRANSPARENT as i32);
                 return app.bg_brush as isize;
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
