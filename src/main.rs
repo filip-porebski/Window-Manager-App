@@ -12,10 +12,12 @@ use std::time::{Duration, Instant};
 use windows_sys::core::BOOL;
 use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, CreateFontW, CreateSolidBrush, DeleteObject, DrawTextW, EndPaint, FillRect,
-    GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, SelectObject, SetBkMode, SetTextColor,
-    CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH, FF_DONTCARE, FW_NORMAL, HBRUSH, HFONT,
-    MONITORINFO, MONITOR_DEFAULTTONEAREST, OUT_DEFAULT_PRECIS, PAINTSTRUCT, TRANSPARENT,
+    BeginPaint, CreateFontW, CreateSolidBrush, DeleteObject, EndPaint, FillRect, GetMonitorInfoW,
+    GetSysColor, MonitorFromPoint, MonitorFromWindow, SetBkColor, SetBkMode, SetTextColor,
+    CLIP_DEFAULT_PRECIS, COLOR_BTNFACE, COLOR_BTNTEXT, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT,
+    COLOR_WINDOW, COLOR_WINDOWTEXT, DEFAULT_CHARSET, DEFAULT_PITCH, DEFAULT_QUALITY, FF_DONTCARE,
+    FW_NORMAL, HBRUSH, HFONT, MONITORINFO, MONITOR_DEFAULTTONEAREST, OUT_DEFAULT_PRECIS,
+    PAINTSTRUCT, TRANSPARENT,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Registry::{
@@ -34,13 +36,14 @@ use windows_sys::Win32::UI::Shell::{
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 const APP_NAME: &str = "WindowManagerApp";
-const APP_VERSION: &str = "v1.1.0";
+const APP_VERSION: &str = "v1.2.0";
 
-const DT_LEFT: u32 = 0x00000000;
-const DT_RIGHT: u32 = 0x00000002;
-const DT_VCENTER: u32 = 0x00000004;
-const DT_SINGLELINE: u32 = 0x00000020;
 const WINDOW_TITLE: &str = "Window Manager";
+const CLIENT_WIDTH: i32 = 771;
+const CLIENT_HEIGHT: i32 = 395;
+const STATUS_HEIGHT: i32 = 20;
+const STATIC_RIGHT: u32 = 0x0002;
+const STATIC_SUNKEN: u32 = 0x1000;
 const APP_ICON_ID: usize = 1;
 const WM_TRAYICON: u32 = WM_USER + 1;
 const TRAY_ID: u32 = 1;
@@ -107,7 +110,7 @@ impl Default for Settings {
             expand_window: "ctrl+shift+up".to_string(),
             shrink_window: "ctrl+shift+down".to_string(),
             startup: false,
-            resize_increment: 8,
+            resize_increment: 10,
             custom_actions: Vec::new(),
         }
     }
@@ -167,14 +170,12 @@ struct App {
     minimize_started: Option<Instant>,
     tray_added: bool,
     bg_brush: HBRUSH,
-    header_brush: HBRUSH,
-    accent_brush: HBRUSH,
     white_brush: HBRUSH,
+    highlight_brush: HBRUSH,
     font_normal: HFONT,
     font_small: HFONT,
     font_bold: HFONT,
     font_mono: HFONT,
-    font_title: HFONT,
 }
 
 impl App {
@@ -191,15 +192,13 @@ impl App {
                 recording: None,
                 minimize_started: None,
                 tray_added: false,
-                bg_brush: CreateSolidBrush(rgb(0xF0, 0xF0, 0xF0)),
-                header_brush: CreateSolidBrush(rgb(0x1E, 0x3A, 0x5F)),
-                accent_brush: CreateSolidBrush(rgb(0x00, 0x78, 0xD4)),
-                white_brush: CreateSolidBrush(rgb(0xFF, 0xFF, 0xFF)),
-                font_normal: create_font(14, FW_NORMAL as i32),
-                font_small: create_font(13, FW_NORMAL as i32),
-                font_bold: create_font(14, 700),
-                font_mono: create_font_face(13, FW_NORMAL as i32, "Cascadia Mono"),
-                font_title: create_font(20, 700),
+                bg_brush: CreateSolidBrush(sys_color(COLOR_BTNFACE)),
+                white_brush: CreateSolidBrush(sys_color(COLOR_WINDOW)),
+                highlight_brush: CreateSolidBrush(sys_color(COLOR_HIGHLIGHT)),
+                font_normal: create_font(11, FW_NORMAL as i32),
+                font_small: create_font(10, FW_NORMAL as i32),
+                font_bold: create_font(11, 700),
+                font_mono: create_font_face(11, FW_NORMAL as i32, "Fixedsys"),
             }
         }
     }
@@ -225,15 +224,23 @@ impl App {
         RegisterClassW(&wc);
 
         let title = wide(WINDOW_TITLE);
+        let style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
+        let mut window_rect = RECT {
+            left: 0,
+            top: 0,
+            right: CLIENT_WIDTH,
+            bottom: CLIENT_HEIGHT,
+        };
+        AdjustWindowRectEx(&mut window_rect, style, 0, 0);
         CreateWindowExW(
             0,
             class_name.as_ptr(),
             title.as_ptr(),
-            WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+            style,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            860,
-            580,
+            window_rect.right - window_rect.left,
+            window_rect.bottom - window_rect.top,
             0 as HWND,
             0 as _,
             self.hinstance,
@@ -261,15 +268,13 @@ impl App {
     }
 
     unsafe fn create_controls(&mut self) {
-        // Header title/subtitle/version are painted in on_paint(), not as child controls.
-
-        self.create_group("Shortcuts", 16, 76, 400, 390);
+        self.create_group("Shortcuts", 6, 6, 365, 318);
         self.create_label(
             "Choose the key combinations for each action.",
-            34,
-            103,
-            340,
             18,
+            26,
+            340,
+            14,
             self.font_small,
         );
 
@@ -313,24 +318,24 @@ impl App {
         ];
 
         for (index, (label, key, edit_id, record_id)) in rows.iter().enumerate() {
-            let y = 130 + (index as i32 * 31);
-            self.create_label(label, 34, y + 5, 116, 20, self.font_normal);
-            let edit = self.create_edit("", *edit_id, 156, y, 158, 24);
+            let y = 48 + (index as i32 * 25);
+            self.create_right_label(label, 18, y + 3, 110, 14, self.font_normal);
+            let edit = self.create_edit("", *edit_id, 136, y, 158, 20);
             self.set_builtin_edit(*key, edit);
-            self.create_button("Record", *record_id, 320, y - 1, 74, 26);
+            self.create_button("Record", *record_id, 299, y - 1, 60, 23);
         }
 
-        self.create_label("Resize Increment:", 34, 329, 128, 20, self.font_normal);
-        self.controls.increment_edit = self.create_edit("", ID_INCREMENT_EDIT, 170, 325, 48, 24);
+        self.create_right_label("Resize Increment:", 18, 211, 110, 14, self.font_normal);
+        self.controls.increment_edit = self.create_edit("", ID_INCREMENT_EDIT, 136, 208, 42, 20);
         self.controls.increment_track = self.create_child(
             "msctls_trackbar32",
             "",
             WS_TABSTOP | TBS_AUTOTICKS,
             0,
             ID_INCREMENT_TRACK,
-            226,
-            322,
-            168,
+            184,
+            202,
+            175,
             32,
         );
         SendMessageW(
@@ -339,24 +344,24 @@ impl App {
             1,
             make_lparam(5, 150),
         );
-        SendMessageW(self.controls.increment_track, TBM_SETPOS, 1, 8);
+        SendMessageW(self.controls.increment_track, TBM_SETPOS, 1, 10);
         self.create_label(
             "Pixels moved per edge when expanding or shrinking.",
-            34,
-            360,
-            355,
             18,
+            239,
+            335,
+            14,
             self.font_small,
         );
-        self.create_button("Save Hotkeys", ID_SAVE, 34, 410, 356, 32);
+        self.create_button("Save Hotkeys", ID_SAVE, 18, 270, 341, 23);
 
-        self.create_group("Custom Resizes", 432, 76, 410, 250);
+        self.create_group("Custom Resizes", 377, 6, 388, 236);
         self.create_label(
             "Create extra resize percentages and shortcuts.",
-            450,
-            103,
-            375,
-            18,
+            389,
+            26,
+            364,
+            14,
             self.font_small,
         );
         self.controls.custom_list = self.create_child(
@@ -365,27 +370,27 @@ impl App {
             WS_BORDER | WS_VSCROLL | LBS_NOTIFY as u32,
             WS_EX_CLIENTEDGE,
             ID_CUSTOM_LIST,
-            450,
-            130,
-            372,
-            82,
+            389,
+            48,
+            364,
+            96,
         );
         self.send_font(self.controls.custom_list, self.font_mono);
-        self.create_label("Percent:", 450, 225, 60, 20, self.font_normal);
-        self.controls.custom_percent = self.create_edit("", ID_CUSTOM_PERCENT, 510, 221, 48, 24);
-        self.create_label("Hotkey:", 570, 225, 54, 20, self.font_normal);
-        self.controls.custom_hotkey = self.create_edit("", ID_CUSTOM_HOTKEY, 622, 221, 96, 24);
-        self.create_button("Set", ID_CUSTOM_RECORD, 726, 220, 52, 26);
-        self.create_button("Add", ID_CUSTOM_ADD, 450, 278, 72, 28);
-        self.create_button("Remove", ID_CUSTOM_REMOVE, 532, 278, 82, 28);
+        self.create_label("Percent:", 389, 158, 52, 14, self.font_normal);
+        self.controls.custom_percent = self.create_edit("", ID_CUSTOM_PERCENT, 444, 154, 42, 20);
+        self.create_label("Hotkey:", 494, 158, 48, 14, self.font_normal);
+        self.controls.custom_hotkey = self.create_edit("", ID_CUSTOM_HOTKEY, 544, 154, 123, 20);
+        self.create_button("Set", ID_CUSTOM_RECORD, 673, 153, 60, 23);
+        self.create_button("Add", ID_CUSTOM_ADD, 389, 192, 75, 23);
+        self.create_button("Remove", ID_CUSTOM_REMOVE, 470, 192, 75, 23);
 
-        self.create_group("Options", 432, 340, 410, 126);
+        self.create_group("Options", 377, 248, 388, 86);
         self.create_label(
             "Control startup and background behavior.",
-            450,
-            367,
-            360,
-            18,
+            389,
+            268,
+            364,
+            14,
             self.font_small,
         );
         self.controls.startup_check = self.create_child(
@@ -394,15 +399,21 @@ impl App {
             BS_AUTOCHECKBOX as u32 | WS_TABSTOP,
             0,
             ID_STARTUP,
-            450,
-            399,
+            389,
+            292,
             155,
-            24,
+            20,
         );
         self.send_font(self.controls.startup_check, self.font_normal);
-        self.create_button("Minimize to Tray", ID_MINIMIZE, 650, 395, 168, 30);
+        self.create_button("Minimize to Tray", ID_MINIMIZE, 595, 288, 158, 23);
 
-        self.controls.status = self.create_label("", 18, 502, 810, 22, self.font_small);
+        self.controls.status = self.create_status(
+            "",
+            0,
+            CLIENT_HEIGHT - STATUS_HEIGHT,
+            CLIENT_WIDTH,
+            STATUS_HEIGHT,
+        );
     }
 
     unsafe fn on_paint(&self, hwnd: HWND) {
@@ -412,36 +423,8 @@ impl App {
         let mut client: RECT = zeroed();
         GetClientRect(hwnd, &mut client);
 
-        let header = RECT { left: 0, top: 0, right: client.right, bottom: 68 };
-        FillRect(hdc, &header, self.header_brush);
+        FillRect(hdc, &client, self.bg_brush);
 
-        let accent = RECT { left: 0, top: 68, right: client.right, bottom: 71 };
-        FillRect(hdc, &accent, self.accent_brush);
-
-        let body = RECT { left: 0, top: 71, right: client.right, bottom: client.bottom };
-        FillRect(hdc, &body, self.bg_brush);
-
-        SetBkMode(hdc, TRANSPARENT as i32);
-
-        let old_font = SelectObject(hdc, self.font_title);
-        SetTextColor(hdc, rgb(0xFF, 0xFF, 0xFF));
-        let title = wide(WINDOW_TITLE);
-        let mut r = RECT { left: 18, top: 8, right: 520, bottom: 42 };
-        DrawTextW(hdc, title.as_ptr(), -1, &mut r, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-        SelectObject(hdc, self.font_small);
-        SetTextColor(hdc, rgb(0xB0, 0xC8, 0xE8));
-        let sub = wide("Resize, center, and manage windows with global shortcuts.");
-        let mut r2 = RECT { left: 20, top: 40, right: 580, bottom: 66 };
-        DrawTextW(hdc, sub.as_ptr(), -1, &mut r2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-        SelectObject(hdc, self.font_bold);
-        SetTextColor(hdc, rgb(0xFF, 0xFF, 0xFF));
-        let ver = wide(APP_VERSION);
-        let mut r3 = RECT { left: 0, top: 8, right: client.right - 18, bottom: 42 };
-        DrawTextW(hdc, ver.as_ptr(), -1, &mut r3, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-
-        SelectObject(hdc, old_font);
         EndPaint(hwnd, &ps);
     }
 
@@ -486,6 +469,26 @@ impl App {
     ) -> HWND {
         let hwnd = self.create_child("STATIC", text, 0, 0, 0, x, y, width, height);
         self.send_font(hwnd, font);
+        hwnd
+    }
+
+    unsafe fn create_right_label(
+        &self,
+        text: &str,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        font: HFONT,
+    ) -> HWND {
+        let hwnd = self.create_child("STATIC", text, STATIC_RIGHT, 0, 0, x, y, width, height);
+        self.send_font(hwnd, font);
+        hwnd
+    }
+
+    unsafe fn create_status(&self, text: &str, x: i32, y: i32, width: i32, height: i32) -> HWND {
+        let hwnd = self.create_child("STATIC", text, STATIC_SUNKEN, 0, 0, x, y, width, height);
+        self.send_font(hwnd, self.font_small);
         hwnd
     }
 
@@ -654,6 +657,30 @@ impl App {
 
     unsafe fn set_status(&self, message: &str) {
         set_text(self.controls.status, message);
+    }
+
+    fn recording_control(&self) -> Option<HWND> {
+        match self.recording {
+            Some(RecordingTarget::BuiltIn(key)) => Some(self.builtin_edit(key)),
+            Some(RecordingTarget::CustomHotkey) => Some(self.controls.custom_hotkey),
+            None => None,
+        }
+    }
+
+    unsafe fn layout_status(&self) {
+        if self.controls.status.is_null() {
+            return;
+        }
+        let mut client: RECT = zeroed();
+        GetClientRect(self.hwnd, &mut client);
+        MoveWindow(
+            self.controls.status,
+            0,
+            client.bottom - STATUS_HEIGHT,
+            client.right,
+            STATUS_HEIGHT,
+            1,
+        );
     }
 
     unsafe fn handle_command(&mut self, id: i32) {
@@ -992,7 +1019,8 @@ impl App {
         data.uCallbackMessage = WM_TRAYICON;
         data.hIcon = load_app_icon(self.hinstance);
         let tip = format!(
-            "Window Manager App - {} hotkeys active",
+            "Window Manager App {} - {} hotkeys active",
+            APP_VERSION,
             self.hotkey_actions.len()
         );
         copy_wide_fixed(&mut data.szTip, &tip);
@@ -1075,14 +1103,12 @@ impl App {
         self.unregister_hotkeys();
         self.remove_tray_icon();
         DeleteObject(self.bg_brush as _);
-        DeleteObject(self.header_brush as _);
-        DeleteObject(self.accent_brush as _);
         DeleteObject(self.white_brush as _);
+        DeleteObject(self.highlight_brush as _);
         DeleteObject(self.font_normal as _);
         DeleteObject(self.font_small as _);
         DeleteObject(self.font_bold as _);
         DeleteObject(self.font_mono as _);
-        DeleteObject(self.font_title as _);
     }
 }
 
@@ -1358,8 +1384,8 @@ fn make_lparam(low: i32, high: i32) -> isize {
     ((low as u16 as u32) | ((high as u16 as u32) << 16)) as isize
 }
 
-fn rgb(r: u8, g: u8, b: u8) -> u32 {
-    r as u32 | ((g as u32) << 8) | ((b as u32) << 16)
+fn sys_color(index: i32) -> u32 {
+    unsafe { GetSysColor(index) }
 }
 
 fn wide(text: &str) -> Vec<u16> {
@@ -1367,7 +1393,7 @@ fn wide(text: &str) -> Vec<u16> {
 }
 
 unsafe fn create_font(height: i32, weight: i32) -> HFONT {
-    create_font_face(height, weight, "Segoe UI")
+    create_font_face(height, weight, "MS Sans Serif")
 }
 
 unsafe fn create_font_face(height: i32, weight: i32, face: &str) -> HFONT {
@@ -1384,7 +1410,7 @@ unsafe fn create_font_face(height: i32, weight: i32, face: &str) -> HFONT {
         DEFAULT_CHARSET as u32,
         OUT_DEFAULT_PRECIS as u32,
         CLIP_DEFAULT_PRECIS as u32,
-        5,
+        DEFAULT_QUALITY as u32,
         (DEFAULT_PITCH | FF_DONTCARE) as u32,
         face.as_ptr(),
     )
@@ -1455,6 +1481,9 @@ unsafe extern "system" fn window_proc(
                 }
                 return 0;
             }
+            if let Some(app) = app {
+                app.layout_status();
+            }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_TRAYICON => {
@@ -1476,15 +1505,29 @@ unsafe extern "system" fn window_proc(
         WM_CTLCOLORSTATIC => {
             if let Some(app) = app {
                 SetBkMode(wparam as _, TRANSPARENT as i32);
-                SetTextColor(wparam as _, rgb(0x1A, 0x1A, 0x1A));
+                SetTextColor(wparam as _, sys_color(COLOR_BTNTEXT));
                 return app.bg_brush as isize;
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
-        WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
+        WM_CTLCOLOREDIT => {
             if let Some(app) = app {
-                SetBkMode(wparam as _, TRANSPARENT as i32);
-                SetTextColor(wparam as _, rgb(0x00, 0x00, 0x00));
+                let is_recording = app.recording_control() == Some(lparam as HWND);
+                if is_recording {
+                    SetBkColor(wparam as _, sys_color(COLOR_HIGHLIGHT));
+                    SetTextColor(wparam as _, sys_color(COLOR_HIGHLIGHTTEXT));
+                    return app.highlight_brush as isize;
+                }
+                SetBkColor(wparam as _, sys_color(COLOR_WINDOW));
+                SetTextColor(wparam as _, sys_color(COLOR_WINDOWTEXT));
+                return app.white_brush as isize;
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_CTLCOLORLISTBOX => {
+            if let Some(app) = app {
+                SetBkColor(wparam as _, sys_color(COLOR_WINDOW));
+                SetTextColor(wparam as _, sys_color(COLOR_WINDOWTEXT));
                 return app.white_brush as isize;
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -1492,6 +1535,7 @@ unsafe extern "system" fn window_proc(
         WM_CTLCOLORBTN => {
             if let Some(app) = app {
                 SetBkMode(wparam as _, TRANSPARENT as i32);
+                SetTextColor(wparam as _, sys_color(COLOR_BTNTEXT));
                 return app.bg_brush as isize;
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
