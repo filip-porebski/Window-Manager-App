@@ -48,6 +48,7 @@ const SHELL_DESKTOP_CLASS: &str = "Progman";
 const SHELL_WORKER_CLASS: &str = "WorkerW";
 const SHELL_PRIMARY_TASKBAR_CLASS: &str = "Shell_TrayWnd";
 const SHELL_SECONDARY_TASKBAR_CLASS: &str = "Shell_SecondaryTrayWnd";
+const SHELL_PROCESS_NAME: &str = "explorer.exe";
 const APP_ICON_ID: usize = 1;
 const WM_TRAYICON: u32 = WM_USER + 1;
 const TRAY_ID: u32 = 1;
@@ -268,6 +269,7 @@ impl App {
         self.apply_settings_to_ui();
         self.register_hotkeys();
         self.add_tray_icon();
+        self.restore_minimized_taskbars(None);
         self.set_status("Ready. Shortcuts are active while the app is running.");
     }
 
@@ -996,7 +998,16 @@ impl App {
             Some(enum_minimize_proc),
             &mut context as *mut EnumContext as isize,
         );
+        self.restore_minimized_taskbars(Some(monitor));
         context.minimized
+    }
+
+    unsafe fn restore_minimized_taskbars(&self, monitor: Option<HMONITOR>) {
+        let mut context = TaskbarRestoreContext { monitor };
+        EnumWindows(
+            Some(restore_taskbar_proc),
+            &mut context as *mut TaskbarRestoreContext as isize,
+        );
     }
 
     unsafe fn add_tray_icon(&mut self) {
@@ -1317,22 +1328,47 @@ unsafe extern "system" fn enum_minimize_proc(hwnd: HWND, lparam: LPARAM) -> BOOL
     }
 
     let class_name = window_class_name(hwnd);
+    let extended_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
     let snapshot = WindowSnapshot {
         is_self: hwnd == context.self_hwnd,
         is_visible: true,
         is_minimized: false,
         is_on_target_monitor: true,
-        is_shell_surface: class_name
-            .as_deref()
-            .map(is_shell_surface_class)
-            .unwrap_or(false),
-        extended_style: GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32,
+        is_shell_surface: is_shell_surface_window(
+            class_name.as_deref(),
+            window_module_name(hwnd).as_deref(),
+            extended_style,
+        ),
+        extended_style,
         has_owner: !GetWindow(hwnd, GW_OWNER).is_null(),
     };
 
     if window_can_be_minimized(snapshot) {
         ShowWindow(hwnd, SW_MINIMIZE);
         context.minimized += 1;
+    }
+    1
+}
+
+struct TaskbarRestoreContext {
+    monitor: Option<HMONITOR>,
+}
+
+unsafe extern "system" fn restore_taskbar_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    let context = &*(lparam as *const TaskbarRestoreContext);
+    let Some(class_name) = window_class_name(hwnd) else {
+        return 1;
+    };
+    if !is_taskbar_class(&class_name) {
+        return 1;
+    }
+    if context
+        .monitor
+        .map(|monitor| MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL) == monitor)
+        .unwrap_or(true)
+        && IsIconic(hwnd) != 0
+    {
+        ShowWindow(hwnd, SW_RESTORE);
     }
     1
 }
@@ -1347,13 +1383,42 @@ fn window_class_name(hwnd: HWND) -> Option<String> {
 }
 
 fn is_shell_surface_class(class_name: &str) -> bool {
+    is_taskbar_class(class_name) || matches!(class_name, SHELL_DESKTOP_CLASS | SHELL_WORKER_CLASS)
+}
+
+fn is_taskbar_class(class_name: &str) -> bool {
     matches!(
         class_name,
-        SHELL_DESKTOP_CLASS
-            | SHELL_WORKER_CLASS
-            | SHELL_PRIMARY_TASKBAR_CLASS
-            | SHELL_SECONDARY_TASKBAR_CLASS
+        SHELL_PRIMARY_TASKBAR_CLASS | SHELL_SECONDARY_TASKBAR_CLASS
     )
+}
+
+fn is_shell_surface_window(
+    class_name: Option<&str>,
+    module_name: Option<&str>,
+    extended_style: u32,
+) -> bool {
+    if class_name.map(is_shell_surface_class).unwrap_or(false) {
+        return true;
+    }
+
+    let is_explorer_window = module_name
+        .map(|name| name.to_ascii_lowercase().ends_with(SHELL_PROCESS_NAME))
+        .unwrap_or(false);
+    let is_non_activating_topmost =
+        extended_style & WS_EX_NOACTIVATE != 0 && extended_style & WS_EX_TOPMOST != 0;
+
+    is_explorer_window && is_non_activating_topmost
+}
+
+fn window_module_name(hwnd: HWND) -> Option<String> {
+    let mut buffer = [0u16; 512];
+    let length =
+        unsafe { GetWindowModuleFileNameW(hwnd, buffer.as_mut_ptr(), buffer.len() as u32) };
+    if length == 0 {
+        return None;
+    }
+    Some(String::from_utf16_lossy(&buffer[..length as usize]))
 }
 
 #[derive(Clone, Copy)]
@@ -1702,6 +1767,17 @@ mod tests {
             shell.is_shell_surface = true;
             assert!(!window_can_be_minimized(shell));
         }
+
+        assert!(is_shell_surface_window(
+            None,
+            Some("C:\\Windows\\explorer.exe"),
+            WS_EX_NOACTIVATE | WS_EX_TOPMOST,
+        ));
+        assert!(!is_shell_surface_window(
+            None,
+            Some("C:\\Windows\\explorer.exe"),
+            0,
+        ));
 
         let mut this_app = app_window();
         this_app.is_self = true;
