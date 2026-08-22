@@ -16,8 +16,8 @@ use windows_sys::Win32::Graphics::Gdi::{
     GetSysColor, MonitorFromPoint, MonitorFromWindow, SetBkColor, SetBkMode, SetTextColor,
     CLIP_DEFAULT_PRECIS, COLOR_BTNFACE, COLOR_BTNTEXT, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT,
     COLOR_WINDOW, COLOR_WINDOWTEXT, DEFAULT_CHARSET, DEFAULT_PITCH, DEFAULT_QUALITY, FF_DONTCARE,
-    FW_NORMAL, HBRUSH, HFONT, MONITORINFO, MONITOR_DEFAULTTONEAREST, OUT_DEFAULT_PRECIS,
-    PAINTSTRUCT, TRANSPARENT,
+    FW_NORMAL, HBRUSH, HFONT, HMONITOR, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    MONITOR_DEFAULTTONULL, OUT_DEFAULT_PRECIS, PAINTSTRUCT, TRANSPARENT,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Registry::{
@@ -36,7 +36,7 @@ use windows_sys::Win32::UI::Shell::{
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 const APP_NAME: &str = "WindowManagerApp";
-const APP_VERSION: &str = "v1.2.0";
+const APP_VERSION: &str = "v1.2.1";
 
 const WINDOW_TITLE: &str = "Window Manager";
 const CLIENT_WIDTH: i32 = 771;
@@ -44,6 +44,10 @@ const CLIENT_HEIGHT: i32 = 395;
 const STATUS_HEIGHT: i32 = 20;
 const STATIC_RIGHT: u32 = 0x0002;
 const STATIC_SUNKEN: u32 = 0x1000;
+const SHELL_DESKTOP_CLASS: &str = "Progman";
+const SHELL_WORKER_CLASS: &str = "WorkerW";
+const SHELL_PRIMARY_TASKBAR_CLASS: &str = "Shell_TrayWnd";
+const SHELL_SECONDARY_TASKBAR_CLASS: &str = "Shell_SecondaryTrayWnd";
 const APP_ICON_ID: usize = 1;
 const WM_TRAYICON: u32 = WM_USER + 1;
 const TRAY_ID: u32 = 1;
@@ -874,8 +878,17 @@ impl App {
                     .map(|started| started.elapsed() <= Duration::from_secs(2))
                     .unwrap_or(false)
                 {
-                    self.minimize_windows_on_current_monitor();
-                    self.set_status("Minimized windows on the current monitor.");
+                    match self.minimize_windows_on_current_monitor() {
+                        Some(count) => {
+                            self.set_status(&format!(
+                                "Minimized {} windows on the current monitor.",
+                                count
+                            ));
+                        }
+                        None => self.set_status("Could not determine the current monitor."),
+                    }
+                } else {
+                    self.set_status("Minimize-all sequence expired.");
                 }
                 self.minimize_started = None;
             }
@@ -961,27 +974,29 @@ impl App {
         SetWindowPos(hwnd, 0 as HWND, left, top, width, height, SWP_NOZORDER);
     }
 
-    unsafe fn minimize_windows_on_current_monitor(&self) {
+    unsafe fn minimize_windows_on_current_monitor(&self) -> Option<usize> {
         let mut point: POINT = zeroed();
         if GetCursorPos(&mut point) == 0 {
-            return;
+            return None;
         }
-        let monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
-        let mut info = MONITORINFO {
-            cbSize: size_of::<MONITORINFO>() as u32,
-            ..zeroed()
-        };
-        if GetMonitorInfoW(monitor, &mut info) == 0 {
-            return;
+        let monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONULL);
+        if monitor.is_null() {
+            return None;
         }
+        Some(self.minimize_windows_on_monitor(monitor))
+    }
+
+    unsafe fn minimize_windows_on_monitor(&self, monitor: HMONITOR) -> usize {
         let mut context = EnumContext {
-            monitor: info.rcMonitor,
+            monitor,
             self_hwnd: self.hwnd,
+            minimized: 0,
         };
         EnumWindows(
             Some(enum_minimize_proc),
             &mut context as *mut EnumContext as isize,
         );
+        context.minimized
     }
 
     unsafe fn add_tray_icon(&mut self) {
@@ -1286,24 +1301,87 @@ unsafe fn monitor_work_area(hwnd: HWND) -> Option<RECT> {
 }
 
 struct EnumContext {
-    monitor: RECT,
+    monitor: HMONITOR,
     self_hwnd: HWND,
+    minimized: usize,
 }
 
 unsafe extern "system" fn enum_minimize_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    let context = &*(lparam as *const EnumContext);
-    if hwnd == context.self_hwnd || IsWindowVisible(hwnd) == 0 {
+    let context = &mut *(lparam as *mut EnumContext);
+    if hwnd == context.self_hwnd || IsWindowVisible(hwnd) == 0 || IsIconic(hwnd) != 0 {
         return 1;
     }
-    let mut rect: RECT = zeroed();
-    if GetWindowRect(hwnd, &mut rect) != 0 && rects_intersect(rect, context.monitor) {
+
+    if MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL) != context.monitor {
+        return 1;
+    }
+
+    let class_name = window_class_name(hwnd);
+    let snapshot = WindowSnapshot {
+        is_self: hwnd == context.self_hwnd,
+        is_visible: true,
+        is_minimized: false,
+        is_on_target_monitor: true,
+        is_shell_surface: class_name
+            .as_deref()
+            .map(is_shell_surface_class)
+            .unwrap_or(false),
+        extended_style: GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32,
+        has_owner: !GetWindow(hwnd, GW_OWNER).is_null(),
+    };
+
+    if window_can_be_minimized(snapshot) {
         ShowWindow(hwnd, SW_MINIMIZE);
+        context.minimized += 1;
     }
     1
 }
 
-fn rects_intersect(a: RECT, b: RECT) -> bool {
-    !(a.left >= b.right || a.right <= b.left || a.top >= b.bottom || a.bottom <= b.top)
+fn window_class_name(hwnd: HWND) -> Option<String> {
+    let mut buffer = [0u16; 256];
+    let length = unsafe { GetClassNameW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32) };
+    if length <= 0 {
+        return None;
+    }
+    Some(String::from_utf16_lossy(&buffer[..length as usize]))
+}
+
+fn is_shell_surface_class(class_name: &str) -> bool {
+    matches!(
+        class_name,
+        SHELL_DESKTOP_CLASS
+            | SHELL_WORKER_CLASS
+            | SHELL_PRIMARY_TASKBAR_CLASS
+            | SHELL_SECONDARY_TASKBAR_CLASS
+    )
+}
+
+#[derive(Clone, Copy)]
+struct WindowSnapshot {
+    is_self: bool,
+    is_visible: bool,
+    is_minimized: bool,
+    is_on_target_monitor: bool,
+    is_shell_surface: bool,
+    extended_style: u32,
+    has_owner: bool,
+}
+
+fn window_can_be_minimized(window: WindowSnapshot) -> bool {
+    if window.is_self
+        || !window.is_visible
+        || window.is_minimized
+        || !window.is_on_target_monitor
+        || window.is_shell_surface
+    {
+        return false;
+    }
+
+    let is_app_window = window.extended_style & WS_EX_APPWINDOW != 0;
+    let is_tool_window = window.extended_style & WS_EX_TOOLWINDOW != 0;
+    let has_non_app_owner = window.has_owner && !is_app_window;
+
+    (!is_tool_window && !has_non_app_owner) || is_app_window
 }
 
 fn read_settings() -> Settings {
@@ -1580,5 +1658,68 @@ mod tests {
         assert_eq!(parse_hotkey("ctrl+alt+up").unwrap().vk, VK_UP as u32);
         assert_eq!(parse_hotkey("shift+f12").unwrap().vk, VK_F12 as u32);
         assert!(parse_hotkey("").is_none());
+    }
+
+    fn app_window() -> WindowSnapshot {
+        WindowSnapshot {
+            is_self: false,
+            is_visible: true,
+            is_minimized: false,
+            is_on_target_monitor: true,
+            is_shell_surface: false,
+            extended_style: 0,
+            has_owner: false,
+        }
+    }
+
+    #[test]
+    fn minimizes_only_visible_windows_on_the_target_monitor() {
+        assert!(window_can_be_minimized(app_window()));
+
+        let mut other_monitor = app_window();
+        other_monitor.is_on_target_monitor = false;
+        assert!(!window_can_be_minimized(other_monitor));
+
+        let mut hidden = app_window();
+        hidden.is_visible = false;
+        assert!(!window_can_be_minimized(hidden));
+
+        let mut minimized = app_window();
+        minimized.is_minimized = true;
+        assert!(!window_can_be_minimized(minimized));
+    }
+
+    #[test]
+    fn never_minimizes_shell_surfaces_or_this_app() {
+        for class_name in [
+            SHELL_DESKTOP_CLASS,
+            SHELL_WORKER_CLASS,
+            SHELL_PRIMARY_TASKBAR_CLASS,
+            SHELL_SECONDARY_TASKBAR_CLASS,
+        ] {
+            assert!(is_shell_surface_class(class_name));
+            let mut shell = app_window();
+            shell.is_shell_surface = true;
+            assert!(!window_can_be_minimized(shell));
+        }
+
+        let mut this_app = app_window();
+        this_app.is_self = true;
+        assert!(!window_can_be_minimized(this_app));
+    }
+
+    #[test]
+    fn excludes_tool_windows_and_owned_popups_unless_app_window_style_is_set() {
+        let mut tool = app_window();
+        tool.extended_style = WS_EX_TOOLWINDOW;
+        assert!(!window_can_be_minimized(tool));
+
+        let mut owned = app_window();
+        owned.has_owner = true;
+        assert!(!window_can_be_minimized(owned));
+
+        let mut explicit_app = owned;
+        explicit_app.extended_style = WS_EX_APPWINDOW;
+        assert!(window_can_be_minimized(explicit_app));
     }
 }
