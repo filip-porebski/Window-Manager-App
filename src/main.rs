@@ -36,7 +36,7 @@ use windows_sys::Win32::UI::Shell::{
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 const APP_NAME: &str = "WindowManagerApp";
-const APP_VERSION: &str = "v1.3.0";
+const APP_VERSION: &str = "v1.3.1";
 
 const WINDOW_TITLE: &str = "Window Manager";
 const CLIENT_WIDTH: i32 = 771;
@@ -54,6 +54,7 @@ const WM_TRAYICON: u32 = WM_USER + 1;
 const TRAY_ID: u32 = 1;
 const TBM_GETPOS_LOCAL: u32 = 1024;
 const DIM_OVERLAY_CLASS: &str = "WindowManagerDimOverlayRust";
+const SEQUENCE_TIMER_ID: usize = 1;
 
 const ID_EDIT_RESIZE_80: i32 = 1001;
 const ID_EDIT_FULLSCREEN: i32 = 1002;
@@ -181,6 +182,10 @@ struct App {
     next_hotkey_id: i32,
     recording: Option<RecordingTarget>,
     sequence_started: Option<(SequenceKind, Instant)>,
+    sequence_keys_down: SequenceKeyState,
+    minimize_hotkey_registered: bool,
+    dim_hotkey_registered: bool,
+    sequence_complete_registered: bool,
     dim_overlay: HWND,
     tray_added: bool,
     bg_brush: HBRUSH,
@@ -191,6 +196,13 @@ struct App {
     font_small: HFONT,
     font_bold: HFONT,
     font_mono: HFONT,
+}
+
+#[derive(Default)]
+struct SequenceKeyState {
+    minimize: bool,
+    dim: bool,
+    complete: bool,
 }
 
 impl App {
@@ -206,6 +218,10 @@ impl App {
                 next_hotkey_id: FIRST_HOTKEY_ID,
                 recording: None,
                 sequence_started: None,
+                sequence_keys_down: SequenceKeyState::default(),
+                minimize_hotkey_registered: false,
+                dim_hotkey_registered: false,
+                sequence_complete_registered: false,
                 dim_overlay: 0 as HWND,
                 tray_added: false,
                 bg_brush: CreateSolidBrush(sys_color(COLOR_BTNFACE)),
@@ -292,6 +308,7 @@ impl App {
         self.settings = read_settings();
         self.apply_settings_to_ui();
         self.register_hotkeys();
+        SetTimer(self.hwnd, SEQUENCE_TIMER_ID, 25, None);
         self.add_tray_icon();
         self.restore_minimized_taskbars(None);
         self.set_status("Ready. Shortcuts are active while the app is running.");
@@ -836,20 +853,23 @@ impl App {
         self.unregister_hotkeys();
         self.next_hotkey_id = FIRST_HOTKEY_ID;
 
-        let builtins = [
+        let configured = [
             (self.settings.resize_80.clone(), HotkeyAction::Resize(0.8)),
             (self.settings.fullscreen.clone(), HotkeyAction::Resize(1.0)),
             (self.settings.center.clone(), HotkeyAction::Center),
             (self.settings.resize_60.clone(), HotkeyAction::Resize(0.6)),
             (self.settings.expand_window.clone(), HotkeyAction::Expand),
             (self.settings.shrink_window.clone(), HotkeyAction::Shrink),
-            ("ctrl+shift+h".to_string(), HotkeyAction::MinimizeStart),
-            ("ctrl+shift+d".to_string(), HotkeyAction::DimStart),
-            ("ctrl+shift+m".to_string(), HotkeyAction::SequenceComplete),
         ];
-        for (hotkey, action) in builtins {
+        for (hotkey, action) in configured {
             self.register_one_hotkey(&hotkey, action);
         }
+        self.minimize_hotkey_registered =
+            self.register_one_hotkey("ctrl+shift+h", HotkeyAction::MinimizeStart);
+        self.dim_hotkey_registered =
+            self.register_one_hotkey("ctrl+shift+d", HotkeyAction::DimStart);
+        self.sequence_complete_registered =
+            self.register_one_hotkey("ctrl+shift+m", HotkeyAction::SequenceComplete);
 
         for action in self.settings.custom_actions.clone() {
             if let Ok(percent) = action.percentage.parse::<f64>() {
@@ -860,14 +880,17 @@ impl App {
         self.update_tray_tip();
     }
 
-    unsafe fn register_one_hotkey(&mut self, hotkey: &str, action: HotkeyAction) {
+    unsafe fn register_one_hotkey(&mut self, hotkey: &str, action: HotkeyAction) -> bool {
         let Some(binding) = parse_hotkey(hotkey) else {
-            return;
+            return false;
         };
         let id = self.next_hotkey_id;
         self.next_hotkey_id += 1;
         if RegisterHotKey(self.hwnd, id, binding.modifiers, binding.vk) != 0 {
             self.hotkey_actions.insert(id, action);
+            true
+        } else {
+            false
         }
     }
 
@@ -876,6 +899,9 @@ impl App {
             UnregisterHotKey(self.hwnd, id);
         }
         self.hotkey_actions.clear();
+        self.minimize_hotkey_registered = false;
+        self.dim_hotkey_registered = false;
+        self.sequence_complete_registered = false;
     }
 
     unsafe fn handle_hotkey(&mut self, id: i32) {
@@ -904,6 +930,45 @@ impl App {
                 self.set_status("Dim sequence started.");
             }
             HotkeyAction::SequenceComplete => self.complete_sequence(),
+        }
+    }
+
+    unsafe fn poll_sequence_hotkeys(&mut self) {
+        let control_down = is_async_key_down(VK_CONTROL as i32)
+            || is_async_key_down(VK_LCONTROL as i32)
+            || is_async_key_down(VK_RCONTROL as i32);
+        let shift_down = is_async_key_down(VK_SHIFT as i32)
+            || is_async_key_down(VK_LSHIFT as i32)
+            || is_async_key_down(VK_RSHIFT as i32);
+        let extra_modifier_down = is_async_key_down(VK_MENU as i32)
+            || is_async_key_down(VK_LMENU as i32)
+            || is_async_key_down(VK_RMENU as i32)
+            || is_async_key_down(VK_LWIN as i32)
+            || is_async_key_down(VK_RWIN as i32);
+        let modifiers_down = control_down && shift_down && !extra_modifier_down;
+        let current = SequenceKeyState {
+            minimize: modifiers_down && is_async_key_down('H' as i32),
+            dim: modifiers_down && is_async_key_down('D' as i32),
+            complete: modifiers_down && is_async_key_down('M' as i32),
+        };
+        let minimize_pressed = current.minimize && !self.sequence_keys_down.minimize;
+        let dim_pressed = current.dim && !self.sequence_keys_down.dim;
+        let complete_pressed = current.complete && !self.sequence_keys_down.complete;
+        self.sequence_keys_down = current;
+
+        if self.recording.is_some() {
+            return;
+        }
+        if minimize_pressed && !self.minimize_hotkey_registered {
+            self.sequence_started = Some((SequenceKind::Minimize, Instant::now()));
+            self.set_status("Minimize-all sequence started.");
+        }
+        if dim_pressed && !self.dim_hotkey_registered {
+            self.sequence_started = Some((SequenceKind::Dim, Instant::now()));
+            self.set_status("Dim sequence started.");
+        }
+        if complete_pressed && !self.sequence_complete_registered {
+            self.complete_sequence();
         }
     }
 
@@ -1219,6 +1284,7 @@ impl App {
     }
 
     unsafe fn cleanup(&mut self) {
+        KillTimer(self.hwnd, SEQUENCE_TIMER_ID);
         self.dismiss_dim_overlay();
         self.unregister_hotkeys();
         self.remove_tray_icon();
@@ -1375,6 +1441,10 @@ unsafe fn format_recorded_hotkey(vk: u32) -> Option<String> {
 
 unsafe fn is_key_down(vk: i32) -> bool {
     (GetKeyState(vk) as u16 & 0x8000) != 0
+}
+
+unsafe fn is_async_key_down(vk: i32) -> bool {
+    GetAsyncKeyState(vk) < 0
 }
 
 fn is_modifier_vk(vk: u32) -> bool {
@@ -1775,6 +1845,15 @@ unsafe extern "system" fn window_proc(
             }
             if let Some(app) = app {
                 app.layout_status();
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_TIMER => {
+            if wparam == SEQUENCE_TIMER_ID {
+                if let Some(app) = app {
+                    app.poll_sequence_hotkeys();
+                }
+                return 0;
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
