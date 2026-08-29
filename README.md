@@ -12,6 +12,8 @@ center, and manage application windows with global hotkeys.
 - Add custom resize percentages with their own hotkeys
 - Minimize all visible windows on the current monitor with `Ctrl + Shift + H`,
   then `Ctrl + Shift + M` within 2 seconds
+- Dim the monitor under the cursor with `Ctrl + Shift + D`, then
+  `Ctrl + Shift + M` within 2 seconds; click that monitor to remove the dimming
 - Minimize to the system tray, restore from the tray menu, and recover hotkeys
 - Optional Start with Windows registry integration
 - Compatible with the previous `settings.json` format

@@ -36,7 +36,7 @@ use windows_sys::Win32::UI::Shell::{
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 const APP_NAME: &str = "WindowManagerApp";
-const APP_VERSION: &str = "v1.2.1";
+const APP_VERSION: &str = "v1.3.0";
 
 const WINDOW_TITLE: &str = "Window Manager";
 const CLIENT_WIDTH: i32 = 771;
@@ -53,6 +53,7 @@ const APP_ICON_ID: usize = 1;
 const WM_TRAYICON: u32 = WM_USER + 1;
 const TRAY_ID: u32 = 1;
 const TBM_GETPOS_LOCAL: u32 = 1024;
+const DIM_OVERLAY_CLASS: &str = "WindowManagerDimOverlayRust";
 
 const ID_EDIT_RESIZE_80: i32 = 1001;
 const ID_EDIT_FULLSCREEN: i32 = 1002;
@@ -128,7 +129,14 @@ enum HotkeyAction {
     Expand,
     Shrink,
     MinimizeStart,
-    MinimizeComplete,
+    DimStart,
+    SequenceComplete,
+}
+
+#[derive(Clone, Copy)]
+enum SequenceKind {
+    Minimize,
+    Dim,
 }
 
 #[derive(Clone, Copy)]
@@ -172,11 +180,13 @@ struct App {
     hotkey_actions: HashMap<i32, HotkeyAction>,
     next_hotkey_id: i32,
     recording: Option<RecordingTarget>,
-    minimize_started: Option<Instant>,
+    sequence_started: Option<(SequenceKind, Instant)>,
+    dim_overlay: HWND,
     tray_added: bool,
     bg_brush: HBRUSH,
     white_brush: HBRUSH,
     highlight_brush: HBRUSH,
+    black_brush: HBRUSH,
     font_normal: HFONT,
     font_small: HFONT,
     font_bold: HFONT,
@@ -195,11 +205,13 @@ impl App {
                 hotkey_actions: HashMap::new(),
                 next_hotkey_id: FIRST_HOTKEY_ID,
                 recording: None,
-                minimize_started: None,
+                sequence_started: None,
+                dim_overlay: 0 as HWND,
                 tray_added: false,
                 bg_brush: CreateSolidBrush(sys_color(COLOR_BTNFACE)),
                 white_brush: CreateSolidBrush(sys_color(COLOR_WINDOW)),
                 highlight_brush: CreateSolidBrush(sys_color(COLOR_HIGHLIGHT)),
+                black_brush: CreateSolidBrush(0),
                 font_normal: create_font(11, FW_NORMAL as i32),
                 font_small: create_font(10, FW_NORMAL as i32),
                 font_bold: create_font(11, 700),
@@ -227,6 +239,18 @@ impl App {
             ..zeroed()
         };
         RegisterClassW(&wc);
+
+        let overlay_class_name = wide(DIM_OVERLAY_CLASS);
+        let overlay_wc = WNDCLASSW {
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(dim_overlay_proc),
+            hInstance: self.hinstance,
+            hCursor: LoadCursorW(0 as _, IDC_ARROW),
+            hbrBackground: self.black_brush,
+            lpszClassName: overlay_class_name.as_ptr(),
+            ..zeroed()
+        };
+        RegisterClassW(&overlay_wc);
 
         let title = wide(WINDOW_TITLE);
         let style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
@@ -820,7 +844,8 @@ impl App {
             (self.settings.expand_window.clone(), HotkeyAction::Expand),
             (self.settings.shrink_window.clone(), HotkeyAction::Shrink),
             ("ctrl+shift+h".to_string(), HotkeyAction::MinimizeStart),
-            ("ctrl+shift+m".to_string(), HotkeyAction::MinimizeComplete),
+            ("ctrl+shift+d".to_string(), HotkeyAction::DimStart),
+            ("ctrl+shift+m".to_string(), HotkeyAction::SequenceComplete),
         ];
         for (hotkey, action) in builtins {
             self.register_one_hotkey(&hotkey, action);
@@ -871,30 +896,98 @@ impl App {
                 app.adjust_window(hwnd, -app.settings.resize_increment)
             }),
             HotkeyAction::MinimizeStart => {
-                self.minimize_started = Some(Instant::now());
+                self.sequence_started = Some((SequenceKind::Minimize, Instant::now()));
                 self.set_status("Minimize-all sequence started.");
             }
-            HotkeyAction::MinimizeComplete => {
-                if self
-                    .minimize_started
-                    .map(|started| started.elapsed() <= Duration::from_secs(2))
-                    .unwrap_or(false)
-                {
-                    match self.minimize_windows_on_current_monitor() {
-                        Some(count) => {
-                            self.set_status(&format!(
-                                "Minimized {} windows on the current monitor.",
-                                count
-                            ));
-                        }
-                        None => self.set_status("Could not determine the current monitor."),
-                    }
+            HotkeyAction::DimStart => {
+                self.sequence_started = Some((SequenceKind::Dim, Instant::now()));
+                self.set_status("Dim sequence started.");
+            }
+            HotkeyAction::SequenceComplete => self.complete_sequence(),
+        }
+    }
+
+    unsafe fn complete_sequence(&mut self) {
+        let Some((sequence, started)) = self.sequence_started.take() else {
+            self.set_status("Shortcut sequence expired.");
+            return;
+        };
+        if started.elapsed() > Duration::from_secs(2) {
+            self.set_status(match sequence {
+                SequenceKind::Minimize => "Minimize-all sequence expired.",
+                SequenceKind::Dim => "Dim sequence expired.",
+            });
+            return;
+        }
+
+        match sequence {
+            SequenceKind::Minimize => match self.minimize_windows_on_current_monitor() {
+                Some(count) => self.set_status(&format!(
+                    "Minimized {} windows on the current monitor.",
+                    count
+                )),
+                None => self.set_status("Could not determine the current monitor."),
+            },
+            SequenceKind::Dim => {
+                if self.dim_current_monitor() {
+                    self.set_status("Monitor dimmed. Click that monitor to remove the dimming.");
                 } else {
-                    self.set_status("Minimize-all sequence expired.");
+                    self.set_status("Could not determine the current monitor.");
                 }
-                self.minimize_started = None;
             }
         }
+    }
+
+    unsafe fn dim_current_monitor(&mut self) -> bool {
+        let Some(rect) = monitor_rect_at_cursor() else {
+            return false;
+        };
+
+        if !self.dim_overlay.is_null() {
+            let previous = self.dim_overlay;
+            self.dim_overlay = 0 as HWND;
+            DestroyWindow(previous);
+        }
+
+        let class_name = wide(DIM_OVERLAY_CLASS);
+        let overlay = CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            class_name.as_ptr(),
+            wide("").as_ptr(),
+            WS_POPUP,
+            rect.left,
+            rect.top,
+            rect.right - rect.left,
+            rect.bottom - rect.top,
+            0 as HWND,
+            0 as _,
+            self.hinstance,
+            null_mut(),
+        );
+        if overlay.is_null() {
+            return false;
+        }
+
+        self.dim_overlay = overlay;
+        SetWindowPos(
+            overlay,
+            HWND_TOPMOST,
+            rect.left,
+            rect.top,
+            rect.right - rect.left,
+            rect.bottom - rect.top,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+        true
+    }
+
+    unsafe fn dismiss_dim_overlay(&mut self) {
+        if self.dim_overlay.is_null() {
+            return;
+        }
+        let overlay = self.dim_overlay;
+        self.dim_overlay = 0 as HWND;
+        DestroyWindow(overlay);
     }
 
     unsafe fn with_foreground_window<F>(&mut self, action: F)
@@ -1126,11 +1219,13 @@ impl App {
     }
 
     unsafe fn cleanup(&mut self) {
+        self.dismiss_dim_overlay();
         self.unregister_hotkeys();
         self.remove_tray_icon();
         DeleteObject(self.bg_brush as _);
         DeleteObject(self.white_brush as _);
         DeleteObject(self.highlight_brush as _);
+        DeleteObject(self.black_brush as _);
         DeleteObject(self.font_normal as _);
         DeleteObject(self.font_small as _);
         DeleteObject(self.font_bold as _);
@@ -1309,6 +1404,60 @@ unsafe fn monitor_work_area(hwnd: HWND) -> Option<RECT> {
         return None;
     }
     Some(info.rcWork)
+}
+
+unsafe fn monitor_rect_at_cursor() -> Option<RECT> {
+    let mut point: POINT = zeroed();
+    if GetCursorPos(&mut point) == 0 {
+        return None;
+    }
+    let monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONULL);
+    if monitor.is_null() {
+        return None;
+    }
+    let mut info = MONITORINFO {
+        cbSize: size_of::<MONITORINFO>() as u32,
+        ..zeroed()
+    };
+    if GetMonitorInfoW(monitor, &mut info) == 0 {
+        return None;
+    }
+    Some(info.rcMonitor)
+}
+
+unsafe extern "system" fn dim_overlay_proc(
+    hwnd: HWND,
+    msg: u32,
+    _wparam: WPARAM,
+    _lparam: LPARAM,
+) -> LRESULT {
+    match msg {
+        WM_MOUSEACTIVATE => MA_NOACTIVATE as isize,
+        WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN => {
+            if !APP_PTR.is_null() {
+                let app = &mut *APP_PTR;
+                if app.dim_overlay == hwnd {
+                    app.dim_overlay = 0 as HWND;
+                    app.set_status("Monitor dim removed.");
+                }
+            }
+            DestroyWindow(hwnd);
+            0
+        }
+        WM_ERASEBKGND => 1,
+        WM_PAINT => {
+            let mut ps: PAINTSTRUCT = zeroed();
+            let hdc = BeginPaint(hwnd, &mut ps);
+            let mut client: RECT = zeroed();
+            GetClientRect(hwnd, &mut client);
+            if !APP_PTR.is_null() {
+                FillRect(hdc, &client, (*APP_PTR).black_brush);
+            }
+            EndPaint(hwnd, &ps);
+            0
+        }
+        _ => DefWindowProcW(hwnd, msg, _wparam, _lparam),
+    }
 }
 
 struct EnumContext {
