@@ -14,6 +14,8 @@ center, and manage application windows with global hotkeys.
   then `Ctrl + Shift + M` within 2 seconds
 - Dim the monitor under the cursor with `Ctrl + Shift + D`, then
   `Ctrl + Shift + M` within 2 seconds; click that monitor to remove the dimming
+- Optionally show a clock in any corner of the dimmed monitor, with a
+  configurable font color
 - Minimize to the system tray, restore from the tray menu, and recover hotkeys
 - Optional Start with Windows registry integration
 - Compatible with the previous `settings.json` format

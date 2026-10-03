@@ -11,22 +11,31 @@ use std::ptr::{null, null_mut};
 use std::time::{Duration, Instant};
 use windows_sys::core::BOOL;
 use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows_sys::Win32::Globalization::{GetTimeFormatEx, TIME_NOSECONDS};
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, CreateFontW, CreateSolidBrush, DeleteObject, EndPaint, FillRect, GetMonitorInfoW,
-    GetSysColor, MonitorFromPoint, MonitorFromWindow, SetBkColor, SetBkMode, SetTextColor,
-    CLIP_DEFAULT_PRECIS, COLOR_BTNFACE, COLOR_BTNTEXT, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT,
-    COLOR_WINDOW, COLOR_WINDOWTEXT, DEFAULT_CHARSET, DEFAULT_PITCH, DEFAULT_QUALITY, FF_DONTCARE,
-    FW_NORMAL, HBRUSH, HFONT, HMONITOR, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-    MONITOR_DEFAULTTONULL, OUT_DEFAULT_PRECIS, PAINTSTRUCT, TRANSPARENT,
+    BeginPaint, CreateFontW, CreateSolidBrush, DeleteObject, DrawFocusRect, DrawTextW, EndPaint,
+    FillRect, GetMonitorInfoW, GetStockObject, InvalidateRect, MonitorFromPoint, MonitorFromWindow,
+    SelectObject, SetBkColor, SetBkMode, SetDCBrushColor, SetPixelV, SetTextColor,
+    CLIP_DEFAULT_PRECIS, DC_BRUSH, DEFAULT_CHARSET, DEFAULT_PITCH, DEFAULT_QUALITY,
+    DRAW_TEXT_FORMAT, DT_BOTTOM, DT_CALCRECT, DT_CENTER, DT_LEFT, DT_NOPREFIX, DT_RIGHT,
+    DT_SINGLELINE, DT_TOP, DT_VCENTER, FF_DONTCARE, FW_NORMAL, HBRUSH, HDC, HFONT, HMONITOR,
+    MONITORINFO, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL, OUT_DEFAULT_PRECIS, PAINTSTRUCT,
+    TRANSPARENT,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Registry::{
     RegCloseKey, RegDeleteValueW, RegOpenKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER,
     KEY_WRITE, REG_SZ,
 };
+use windows_sys::Win32::UI::Controls::Dialogs::{
+    ChooseColorW, CC_FULLOPEN, CC_RGBINIT, CHOOSECOLORW,
+};
 use windows_sys::Win32::UI::Controls::{
-    InitCommonControlsEx, BST_CHECKED, BST_UNCHECKED, ICC_BAR_CLASSES, INITCOMMONCONTROLSEX,
-    TBM_SETPOS, TBM_SETRANGE, TBS_AUTOTICKS,
+    InitCommonControlsEx, CDDS_ITEMPREPAINT, CDDS_PREPAINT, CDRF_DODEFAULT, CDRF_NOTIFYITEMDRAW,
+    CDRF_SKIPDEFAULT, DRAWITEMSTRUCT, EM_SETMARGINS, ICC_BAR_CLASSES, INITCOMMONCONTROLSEX,
+    MEASUREITEMSTRUCT, NMCUSTOMDRAW, NMHDR, NM_CUSTOMDRAW, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED,
+    ODT_BUTTON, ODT_LISTBOX, TBCD_CHANNEL, TBCD_THUMB, TBM_SETPOS, TBM_SETRANGE, TBM_SETTICFREQ,
+    TBS_AUTOTICKS,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::Shell::{
@@ -36,14 +45,14 @@ use windows_sys::Win32::UI::Shell::{
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 const APP_NAME: &str = "WindowManagerApp";
-const APP_VERSION: &str = "v1.3.1";
+const APP_VERSION: &str = "v1.4.0";
 
 const WINDOW_TITLE: &str = "Window Manager";
 const CLIENT_WIDTH: i32 = 771;
-const CLIENT_HEIGHT: i32 = 395;
+const CLIENT_HEIGHT: i32 = 436;
 const STATUS_HEIGHT: i32 = 20;
+const LIST_ROW_HEIGHT: u32 = 16;
 const STATIC_RIGHT: u32 = 0x0002;
-const STATIC_SUNKEN: u32 = 0x1000;
 const SHELL_DESKTOP_CLASS: &str = "Progman";
 const SHELL_WORKER_CLASS: &str = "WorkerW";
 const SHELL_PRIMARY_TASKBAR_CLASS: &str = "Shell_TrayWnd";
@@ -55,6 +64,25 @@ const TRAY_ID: u32 = 1;
 const TBM_GETPOS_LOCAL: u32 = 1024;
 const DIM_OVERLAY_CLASS: &str = "WindowManagerDimOverlayRust";
 const SEQUENCE_TIMER_ID: usize = 1;
+const CLOCK_TIMER_ID: usize = 2;
+const DEFAULT_CLOCK_COLOR: &str = "#2b2b2b";
+// Windows 95 palette from the design spec, as GDI COLORREFs (0x00bbggrr).
+const WIN95_FACE: u32 = 0x00c0_c0c0;
+const WIN95_HIGHLIGHT: u32 = 0x00ff_ffff;
+const WIN95_LIGHT: u32 = 0x00df_dfdf;
+const WIN95_SHADOW: u32 = 0x0080_8080;
+const WIN95_DARK_SHADOW: u32 = 0x0000_0000;
+const WIN95_TEXT: u32 = 0x0000_0000;
+const WIN95_WINDOW: u32 = 0x00ff_ffff;
+const WIN95_SELECTION: u32 = 0x0080_0000;
+const WIN95_SELECTION_TEXT: u32 = 0x00ff_ffff;
+
+const CLOCK_CORNERS: [(&str, &str); 4] = [
+    ("top-left", "Top left"),
+    ("top-right", "Top right"),
+    ("bottom-left", "Bottom left"),
+    ("bottom-right", "Bottom right"),
+];
 
 const ID_EDIT_RESIZE_80: i32 = 1001;
 const ID_EDIT_FULLSCREEN: i32 = 1002;
@@ -79,9 +107,15 @@ const ID_CUSTOM_ADD: i32 = 1305;
 const ID_CUSTOM_REMOVE: i32 = 1306;
 const ID_STARTUP: i32 = 1401;
 const ID_MINIMIZE: i32 = 1402;
+const ID_CLOCK_ENABLED: i32 = 1501;
+const ID_CLOCK_CORNER: i32 = 1502;
+const ID_CLOCK_COLOR: i32 = 1503;
+const ID_CLOCK_SWATCH: i32 = 1504;
+const ID_CLOCK_CHOOSE: i32 = 1505;
 const ID_TRAY_RESTORE: i32 = 4001;
 const ID_TRAY_RECOVER: i32 = 4002;
 const ID_TRAY_EXIT: i32 = 4003;
+const ID_CORNER_MENU_FIRST: i32 = 6001;
 
 const FIRST_HOTKEY_ID: i32 = 5000;
 
@@ -105,6 +139,9 @@ struct Settings {
     startup: bool,
     resize_increment: i32,
     custom_actions: Vec<CustomAction>,
+    dim_clock: bool,
+    dim_clock_corner: String,
+    dim_clock_color: String,
 }
 
 impl Default for Settings {
@@ -119,6 +156,9 @@ impl Default for Settings {
             startup: false,
             resize_increment: 10,
             custom_actions: Vec::new(),
+            dim_clock: false,
+            dim_clock_corner: "bottom-right".to_string(),
+            dim_clock_color: DEFAULT_CLOCK_COLOR.to_string(),
         }
     }
 }
@@ -170,6 +210,10 @@ struct Controls {
     custom_list: HWND,
     custom_percent: HWND,
     custom_hotkey: HWND,
+    clock_check: HWND,
+    clock_corner: HWND,
+    clock_color: HWND,
+    clock_swatch: HWND,
     status: HWND,
 }
 
@@ -187,11 +231,16 @@ struct App {
     dim_hotkey_registered: bool,
     sequence_complete_registered: bool,
     dim_overlay: HWND,
+    dim_clock_text: Vec<u16>,
     tray_added: bool,
+    groups: Vec<(String, RECT)>,
+    sunken_frames: Vec<RECT>,
     bg_brush: HBRUSH,
     white_brush: HBRUSH,
     highlight_brush: HBRUSH,
     black_brush: HBRUSH,
+    clock_brush: HBRUSH,
+    custom_colors: [u32; 16],
     font_normal: HFONT,
     font_small: HFONT,
     font_bold: HFONT,
@@ -223,11 +272,16 @@ impl App {
                 dim_hotkey_registered: false,
                 sequence_complete_registered: false,
                 dim_overlay: 0 as HWND,
+                dim_clock_text: Vec::new(),
                 tray_added: false,
-                bg_brush: CreateSolidBrush(sys_color(COLOR_BTNFACE)),
-                white_brush: CreateSolidBrush(sys_color(COLOR_WINDOW)),
-                highlight_brush: CreateSolidBrush(sys_color(COLOR_HIGHLIGHT)),
+                groups: Vec::new(),
+                sunken_frames: Vec::new(),
+                bg_brush: CreateSolidBrush(WIN95_FACE),
+                white_brush: CreateSolidBrush(WIN95_WINDOW),
+                highlight_brush: CreateSolidBrush(WIN95_SELECTION),
                 black_brush: CreateSolidBrush(0),
+                clock_brush: 0 as HBRUSH,
+                custom_colors: [0x00ff_ffff; 16],
                 font_normal: create_font(11, FW_NORMAL as i32),
                 font_small: create_font(10, FW_NORMAL as i32),
                 font_bold: create_font(11, 700),
@@ -391,6 +445,7 @@ impl App {
             1,
             make_lparam(5, 150),
         );
+        SendMessageW(self.controls.increment_track, TBM_SETTICFREQ, 10, 0);
         SendMessageW(self.controls.increment_track, TBM_SETPOS, 1, 10);
         self.create_label(
             "Pixels moved per edge when expanding or shrinking.",
@@ -411,11 +466,9 @@ impl App {
             14,
             self.font_small,
         );
-        self.controls.custom_list = self.create_child(
+        self.controls.custom_list = self.create_sunken_child(
             "LISTBOX",
-            "",
-            WS_BORDER | WS_VSCROLL | LBS_NOTIFY as u32,
-            WS_EX_CLIENTEDGE,
+            WS_VSCROLL | (LBS_NOTIFY | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS) as u32,
             ID_CUSTOM_LIST,
             389,
             48,
@@ -440,19 +493,28 @@ impl App {
             14,
             self.font_small,
         );
-        self.controls.startup_check = self.create_child(
-            "BUTTON",
-            "Start with Windows",
-            BS_AUTOCHECKBOX as u32 | WS_TABSTOP,
-            0,
-            ID_STARTUP,
-            389,
-            292,
-            155,
-            20,
-        );
-        self.send_font(self.controls.startup_check, self.font_normal);
+        self.controls.startup_check =
+            self.create_button("Start with Windows", ID_STARTUP, 389, 292, 155, 20);
         self.create_button("Minimize to Tray", ID_MINIMIZE, 595, 288, 158, 23);
+
+        self.create_group("Dim Clock", 6, 340, 759, 70);
+        self.create_label(
+            "Show the time in a corner of the monitor dimmed with Ctrl + Shift + D, then Ctrl + Shift + M.",
+            18,
+            360,
+            735,
+            14,
+            self.font_small,
+        );
+        self.controls.clock_check =
+            self.create_button("Show clock when dimmed", ID_CLOCK_ENABLED, 18, 382, 180, 20);
+        self.create_label("Corner:", 214, 385, 46, 14, self.font_normal);
+        self.controls.clock_corner = self.create_button("", ID_CLOCK_CORNER, 262, 382, 120, 20);
+        self.create_label("Font color:", 400, 385, 62, 14, self.font_normal);
+        self.controls.clock_color = self.create_edit("", ID_CLOCK_COLOR, 464, 382, 70, 20);
+        self.controls.clock_swatch =
+            self.create_sunken_child("STATIC", 0, ID_CLOCK_SWATCH, 540, 382, 20, 20);
+        self.create_button("Choose...", ID_CLOCK_CHOOSE, 566, 381, 80, 23);
 
         self.controls.status = self.create_status(
             "",
@@ -461,6 +523,7 @@ impl App {
             CLIENT_WIDTH,
             STATUS_HEIGHT,
         );
+        self.layout_status();
     }
 
     unsafe fn on_paint(&self, hwnd: HWND) {
@@ -471,6 +534,14 @@ impl App {
         GetClientRect(hwnd, &mut client);
 
         FillRect(hdc, &client, self.bg_brush);
+        for (title, rect) in &self.groups {
+            draw_group(hdc, title, rect, self.font_bold);
+        }
+        for frame in &self.sunken_frames {
+            fill_solid(hdc, &inset_rect(frame, 2), WIN95_WINDOW);
+            draw_sunken(hdc, frame);
+        }
+        draw_bevel(hdc, &status_frame(&client), WIN95_SHADOW, WIN95_HIGHLIGHT);
 
         EndPaint(hwnd, &ps);
     }
@@ -534,27 +605,20 @@ impl App {
     }
 
     unsafe fn create_status(&self, text: &str, x: i32, y: i32, width: i32, height: i32) -> HWND {
-        let hwnd = self.create_child("STATIC", text, STATIC_SUNKEN, 0, 0, x, y, width, height);
-        self.send_font(hwnd, self.font_small);
+        let hwnd = self.create_child("STATIC", text, 0, 0, 0, x, y, width, height);
+        self.send_font(hwnd, self.font_normal);
         hwnd
     }
 
-    unsafe fn create_group(&self, text: &str, x: i32, y: i32, width: i32, height: i32) -> HWND {
-        let hwnd = self.create_child(
-            "BUTTON",
-            text,
-            BS_GROUPBOX as u32,
-            0,
-            0,
-            x,
-            y,
-            width,
-            height,
-        );
-        self.send_font(hwnd, self.font_bold);
-        hwnd
+    /// Group boxes are painted by the main window (see `draw_group`) so the
+    /// etched frame, title cutout and face color match the design spec.
+    fn create_group(&mut self, text: &str, x: i32, y: i32, width: i32, height: i32) {
+        self.groups
+            .push((text.to_string(), make_rect(x, y, x + width, y + height)));
     }
 
+    /// Push buttons, checkboxes and the corner dropdown are all owner-drawn
+    /// buttons; `draw_item` picks the look from the control ID.
     unsafe fn create_button(
         &self,
         text: &str,
@@ -567,7 +631,7 @@ impl App {
         let hwnd = self.create_child(
             "BUTTON",
             text,
-            BS_PUSHBUTTON as u32 | WS_TABSTOP,
+            BS_OWNERDRAW as u32 | WS_TABSTOP,
             0,
             id,
             x,
@@ -579,8 +643,36 @@ impl App {
         hwnd
     }
 
+    /// Creates a borderless control inside a 4-layer sunken frame that the
+    /// main window paints around it.
+    unsafe fn create_sunken_child(
+        &mut self,
+        class: &str,
+        style: u32,
+        id: i32,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) -> HWND {
+        let frame = make_rect(x, y, x + width, y + height);
+        self.sunken_frames.push(frame);
+        let inner = inset_rect(&frame, 2);
+        self.create_child(
+            class,
+            "",
+            style,
+            0,
+            id,
+            inner.left,
+            inner.top,
+            inner.right - inner.left,
+            inner.bottom - inner.top,
+        )
+    }
+
     unsafe fn create_edit(
-        &self,
+        &mut self,
         text: &str,
         id: i32,
         x: i32,
@@ -588,18 +680,23 @@ impl App {
         width: i32,
         height: i32,
     ) -> HWND {
-        let hwnd = self.create_child(
+        let hwnd = self.create_sunken_child(
             "EDIT",
-            text,
-            WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL as u32,
-            WS_EX_CLIENTEDGE,
+            WS_TABSTOP | ES_AUTOHSCROLL as u32,
             id,
             x,
             y,
             width,
             height,
         );
+        set_text(hwnd, text);
         self.send_font(hwnd, self.font_normal);
+        SendMessageW(
+            hwnd,
+            EM_SETMARGINS,
+            (EC_LEFTMARGIN | EC_RIGHTMARGIN) as usize,
+            make_lparam(2, 2),
+        );
         hwnd
     }
 
@@ -647,17 +744,193 @@ impl App {
             1,
             self.settings.resize_increment as isize,
         );
-        SendMessageW(
-            self.controls.startup_check,
-            BM_SETCHECK,
-            if self.settings.startup {
-                BST_CHECKED
-            } else {
-                BST_UNCHECKED
-            } as usize,
-            0,
-        );
+        set_checked(self.controls.startup_check, self.settings.startup);
         self.refresh_custom_list();
+        self.apply_clock_settings_to_ui();
+    }
+
+    unsafe fn apply_clock_settings_to_ui(&mut self) {
+        set_checked(self.controls.clock_check, self.settings.dim_clock);
+        let (corner, label) = CLOCK_CORNERS[clock_corner_index(&self.settings.dim_clock_corner)];
+        self.settings.dim_clock_corner = corner.to_string();
+        set_text(self.controls.clock_corner, label);
+        InvalidateRect(self.controls.clock_corner, null(), 0);
+        let color = parse_hex_color(&self.settings.dim_clock_color)
+            .unwrap_or_else(|| parse_hex_color(DEFAULT_CLOCK_COLOR).unwrap());
+        self.settings.dim_clock_color = format_hex_color(color);
+        set_text(self.controls.clock_color, &self.settings.dim_clock_color);
+        self.refresh_clock_brush(color);
+    }
+
+    unsafe fn read_clock_settings_from_ui(&mut self) -> bool {
+        self.settings.dim_clock = is_checked(self.controls.clock_check);
+        let color_valid = match parse_hex_color(&get_text(self.controls.clock_color)) {
+            Some(color) => {
+                self.settings.dim_clock_color = format_hex_color(color);
+                true
+            }
+            None => false,
+        };
+        self.apply_clock_settings_to_ui();
+        color_valid
+    }
+
+    unsafe fn save_clock_settings(&mut self) {
+        let color_valid = self.read_clock_settings_from_ui();
+        write_settings(&self.settings);
+        self.repaint_dim_overlay();
+        if color_valid {
+            self.set_status("Dim clock settings saved.");
+        } else {
+            self.set_status("Enter the clock color as a hex value such as #2b2b2b.");
+        }
+    }
+
+    unsafe fn choose_clock_color(&mut self) {
+        let current = parse_hex_color(&self.settings.dim_clock_color).unwrap_or(0);
+        let mut dialog = CHOOSECOLORW {
+            lStructSize: size_of::<CHOOSECOLORW>() as u32,
+            hwndOwner: self.hwnd,
+            rgbResult: current,
+            lpCustColors: self.custom_colors.as_mut_ptr(),
+            Flags: CC_RGBINIT | CC_FULLOPEN,
+            ..zeroed()
+        };
+        if ChooseColorW(&mut dialog) == 0 {
+            return;
+        }
+        set_text(
+            self.controls.clock_color,
+            &format_hex_color(dialog.rgbResult),
+        );
+        self.save_clock_settings();
+    }
+
+    unsafe fn choose_clock_corner(&mut self) {
+        let menu = CreatePopupMenu();
+        let current = clock_corner_index(&self.settings.dim_clock_corner);
+        for (index, (_, label)) in CLOCK_CORNERS.iter().enumerate() {
+            let checked = if index == current { MF_CHECKED } else { 0 };
+            let label = wide(label);
+            AppendMenuW(
+                menu,
+                MF_STRING | checked,
+                ID_CORNER_MENU_FIRST as usize + index,
+                label.as_ptr(),
+            );
+        }
+
+        let mut field: RECT = zeroed();
+        GetWindowRect(self.controls.clock_corner, &mut field);
+        let chosen = TrackPopupMenu(
+            menu,
+            TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
+            field.left,
+            field.bottom,
+            0,
+            self.hwnd,
+            null(),
+        );
+        DestroyMenu(menu);
+
+        let Some((corner, _)) = CLOCK_CORNERS.get((chosen - ID_CORNER_MENU_FIRST) as usize) else {
+            return;
+        };
+        self.settings.dim_clock_corner = corner.to_string();
+        self.save_clock_settings();
+    }
+
+    unsafe fn refresh_clock_brush(&mut self, color: u32) {
+        if !self.clock_brush.is_null() {
+            DeleteObject(self.clock_brush as _);
+        }
+        self.clock_brush = CreateSolidBrush(color);
+        InvalidateRect(self.controls.clock_swatch, null(), 1);
+    }
+
+    unsafe fn repaint_dim_overlay(&self) {
+        if !self.dim_overlay.is_null() {
+            InvalidateRect(self.dim_overlay, null(), 0);
+        }
+    }
+
+    unsafe fn draw_item(&self, item: &DRAWITEMSTRUCT) {
+        match item.CtlType {
+            ODT_LISTBOX => self.draw_list_item(item),
+            ODT_BUTTON => {
+                let text = get_text(item.hwndItem);
+                match item.CtlID as i32 {
+                    ID_STARTUP | ID_CLOCK_ENABLED => draw_checkbox(
+                        item.hDC,
+                        &item.rcItem,
+                        &text,
+                        is_checked(item.hwndItem),
+                        item.itemState,
+                        self.font_normal,
+                    ),
+                    ID_CLOCK_CORNER => draw_dropdown(
+                        item.hDC,
+                        &item.rcItem,
+                        &text,
+                        item.itemState,
+                        self.font_normal,
+                    ),
+                    _ => draw_push_button(
+                        item.hDC,
+                        &item.rcItem,
+                        &text,
+                        item.itemState,
+                        self.font_bold,
+                    ),
+                }
+            }
+            _ => {}
+        }
+    }
+
+    unsafe fn draw_list_item(&self, item: &DRAWITEMSTRUCT) {
+        // An empty list still asks to draw its focus; there is no row to draw.
+        if item.itemID == u32::MAX {
+            return;
+        }
+        let selected = item.itemState & ODS_SELECTED != 0;
+        fill_solid(
+            item.hDC,
+            &item.rcItem,
+            if selected {
+                WIN95_SELECTION
+            } else {
+                WIN95_WINDOW
+            },
+        );
+
+        let len = SendMessageW(item.hwndItem, LB_GETTEXTLEN, item.itemID as usize, 0);
+        let mut buffer = vec![0u16; len.max(0) as usize + 1];
+        let read = SendMessageW(
+            item.hwndItem,
+            LB_GETTEXT,
+            item.itemID as usize,
+            buffer.as_mut_ptr() as isize,
+        );
+        let text = String::from_utf16_lossy(&buffer[..read.max(0) as usize]);
+
+        let mut text_rect = item.rcItem;
+        text_rect.left += 4;
+        draw_label(
+            item.hDC,
+            &text,
+            &text_rect,
+            self.font_mono,
+            if selected {
+                WIN95_SELECTION_TEXT
+            } else {
+                WIN95_TEXT
+            },
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+        );
+        if item.itemState & ODS_FOCUS != 0 {
+            DrawFocusRect(item.hDC, &item.rcItem);
+        }
     }
 
     unsafe fn refresh_custom_list(&self) {
@@ -682,10 +955,11 @@ impl App {
         self.settings.expand_window = get_text(self.controls.expand);
         self.settings.shrink_window = get_text(self.controls.shrink);
         self.settings.resize_increment = self.read_increment();
-        self.settings.startup =
-            SendMessageW(self.controls.startup_check, BM_GETCHECK, 0, 0) == BST_CHECKED as isize;
+        self.settings.startup = is_checked(self.controls.startup_check);
+        self.read_clock_settings_from_ui();
 
         write_settings(&self.settings);
+        self.repaint_dim_overlay();
         self.set_startup(self.settings.startup);
         self.register_hotkeys();
         self.set_status("Settings saved and hotkeys registered.");
@@ -720,17 +994,28 @@ impl App {
         }
         let mut client: RECT = zeroed();
         GetClientRect(self.hwnd, &mut client);
+        let frame = status_frame(&client);
         MoveWindow(
             self.controls.status,
-            0,
-            client.bottom - STATUS_HEIGHT,
-            client.right,
-            STATUS_HEIGHT,
+            frame.left + 4,
+            frame.top + 2,
+            frame.right - frame.left - 8,
+            frame.bottom - frame.top - 4,
             1,
         );
     }
 
-    unsafe fn handle_command(&mut self, id: i32) {
+    unsafe fn handle_command(&mut self, id: i32, code: u32) {
+        if id == ID_CLOCK_COLOR {
+            if code == EN_KILLFOCUS {
+                self.save_clock_settings();
+            }
+            return;
+        }
+        // Owner-drawn buttons report a fast second click as BN_DOUBLECLICKED.
+        if code != BN_CLICKED && code != BN_DOUBLECLICKED {
+            return;
+        }
         match id {
             ID_RECORD_RESIZE_80 => {
                 self.start_recording(RecordingTarget::BuiltIn(BuiltInKey::Resize80))
@@ -748,8 +1033,17 @@ impl App {
             ID_SAVE => self.save_from_ui(),
             ID_CUSTOM_ADD => self.add_custom_action(),
             ID_CUSTOM_REMOVE => self.remove_custom_action(),
-            ID_STARTUP => self.save_from_ui(),
+            ID_STARTUP => {
+                toggle_checked(self.controls.startup_check);
+                self.save_from_ui();
+            }
             ID_MINIMIZE => self.minimize_to_tray(),
+            ID_CLOCK_ENABLED => {
+                toggle_checked(self.controls.clock_check);
+                self.save_clock_settings();
+            }
+            ID_CLOCK_CORNER => self.choose_clock_corner(),
+            ID_CLOCK_CHOOSE => self.choose_clock_color(),
             ID_TRAY_RESTORE => self.restore_from_tray(),
             ID_TRAY_RECOVER => {
                 self.register_hotkeys();
@@ -1043,6 +1337,7 @@ impl App {
             rect.bottom - rect.top,
             SWP_NOACTIVATE | SWP_SHOWWINDOW,
         );
+        SetTimer(overlay, CLOCK_TIMER_ID, 1000, None);
         true
     }
 
@@ -1292,6 +1587,7 @@ impl App {
         DeleteObject(self.white_brush as _);
         DeleteObject(self.highlight_brush as _);
         DeleteObject(self.black_brush as _);
+        DeleteObject(self.clock_brush as _);
         DeleteObject(self.font_normal as _);
         DeleteObject(self.font_small as _);
         DeleteObject(self.font_bold as _);
@@ -1515,19 +1811,133 @@ unsafe extern "system" fn dim_overlay_proc(
             0
         }
         WM_ERASEBKGND => 1,
+        WM_TIMER => {
+            if _wparam == CLOCK_TIMER_ID && !APP_PTR.is_null() {
+                let app = &*APP_PTR;
+                if app.settings.dim_clock && app.dim_clock_text != current_time_text() {
+                    let mut client: RECT = zeroed();
+                    GetClientRect(hwnd, &mut client);
+                    let (rect, _, _) = clock_layout(&client, &app.settings.dim_clock_corner);
+                    InvalidateRect(hwnd, &rect, 0);
+                }
+            }
+            0
+        }
         WM_PAINT => {
             let mut ps: PAINTSTRUCT = zeroed();
             let hdc = BeginPaint(hwnd, &mut ps);
             let mut client: RECT = zeroed();
             GetClientRect(hwnd, &mut client);
             if !APP_PTR.is_null() {
-                FillRect(hdc, &client, (*APP_PTR).black_brush);
+                let app = &mut *APP_PTR;
+                FillRect(hdc, &client, app.black_brush);
+                if app.settings.dim_clock {
+                    app.dim_clock_text = paint_clock(hdc, &client, &app.settings);
+                }
             }
             EndPaint(hwnd, &ps);
             0
         }
         _ => DefWindowProcW(hwnd, msg, _wparam, _lparam),
     }
+}
+
+unsafe fn paint_clock(hdc: HDC, client: &RECT, settings: &Settings) -> Vec<u16> {
+    let (mut rect, font_height, format) = clock_layout(client, &settings.dim_clock_corner);
+    let color = parse_hex_color(&settings.dim_clock_color)
+        .unwrap_or_else(|| parse_hex_color(DEFAULT_CLOCK_COLOR).unwrap());
+    let font = create_font_face(font_height, 300, "Segoe UI");
+    let previous_font = SelectObject(hdc, font as _);
+    SetBkMode(hdc, TRANSPARENT as i32);
+    SetTextColor(hdc, color);
+    let text = current_time_text();
+    DrawTextW(hdc, text.as_ptr(), text.len() as i32, &mut rect, format);
+    SelectObject(hdc, previous_font);
+    DeleteObject(font as _);
+    text
+}
+
+/// Returns the clock's text box, font height and DrawText alignment for a
+/// monitor-sized client area. The box sits a small padding away from the corner.
+fn clock_layout(client: &RECT, corner: &str) -> (RECT, i32, DRAW_TEXT_FORMAT) {
+    let monitor_height = client.bottom - client.top;
+    let font_height = (monitor_height / 18).clamp(24, 160);
+    let padding = font_height / 2;
+    let width = font_height * 6;
+    let height = font_height * 2;
+    let (left_side, top_side) = match corner {
+        "top-left" => (true, true),
+        "top-right" => (false, true),
+        "bottom-left" => (true, false),
+        _ => (false, false),
+    };
+
+    let (left, right, horizontal) = if left_side {
+        let left = client.left + padding;
+        (left, left + width, DT_LEFT)
+    } else {
+        let right = client.right - padding;
+        (right - width, right, DT_RIGHT)
+    };
+    let (top, bottom, vertical) = if top_side {
+        let top = client.top + padding;
+        (top, top + height, DT_TOP)
+    } else {
+        let bottom = client.bottom - padding;
+        (bottom - height, bottom, DT_BOTTOM)
+    };
+
+    (
+        RECT {
+            left,
+            top,
+            right,
+            bottom,
+        },
+        font_height,
+        horizontal | vertical | DT_SINGLELINE | DT_NOPREFIX,
+    )
+}
+
+unsafe fn current_time_text() -> Vec<u16> {
+    let mut buffer = [0u16; 64];
+    let len = GetTimeFormatEx(
+        null(),
+        TIME_NOSECONDS,
+        null(),
+        null(),
+        buffer.as_mut_ptr(),
+        buffer.len() as i32,
+    );
+    // The returned length includes the terminating null.
+    buffer[..(len as usize).saturating_sub(1)].to_vec()
+}
+
+fn clock_corner_index(corner: &str) -> usize {
+    CLOCK_CORNERS
+        .iter()
+        .position(|(key, _)| *key == corner)
+        .unwrap_or(CLOCK_CORNERS.len() - 1)
+}
+
+/// Parses `#rrggbb` (the `#` is optional) into a GDI COLORREF (0x00bbggrr).
+fn parse_hex_color(input: &str) -> Option<u32> {
+    let hex = input.trim().trim_start_matches('#');
+    if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let rgb = u32::from_str_radix(hex, 16).ok()?;
+    let (r, g, b) = ((rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff);
+    Some(r | (g << 8) | (b << 16))
+}
+
+fn format_hex_color(color: u32) -> String {
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        color & 0xff,
+        (color >> 8) & 0xff,
+        (color >> 16) & 0xff
+    )
 }
 
 struct EnumContext {
@@ -1746,8 +2156,368 @@ fn make_lparam(low: i32, high: i32) -> isize {
     ((low as u16 as u32) | ((high as u16 as u32) << 16)) as isize
 }
 
-fn sys_color(index: i32) -> u32 {
-    unsafe { GetSysColor(index) }
+// --- Windows 95 drawing -----------------------------------------------------
+//
+// Everything below paints with the fixed palette from the design spec instead
+// of system colors, which are flat Windows 11 grays on current systems.
+
+fn make_rect(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
+    RECT {
+        left,
+        top,
+        right,
+        bottom,
+    }
+}
+
+fn inset_rect(rect: &RECT, by: i32) -> RECT {
+    make_rect(
+        rect.left + by,
+        rect.top + by,
+        rect.right - by,
+        rect.bottom - by,
+    )
+}
+
+fn offset_rect(rect: &RECT, by: i32) -> RECT {
+    make_rect(
+        rect.left + by,
+        rect.top + by,
+        rect.right + by,
+        rect.bottom + by,
+    )
+}
+
+/// The status bar's 1px sunken border, pinned to the bottom of the client area.
+fn status_frame(client: &RECT) -> RECT {
+    make_rect(
+        client.left + 2,
+        client.bottom - STATUS_HEIGHT + 1,
+        client.right - 2,
+        client.bottom - 1,
+    )
+}
+
+unsafe fn fill_solid(hdc: HDC, rect: &RECT, color: u32) {
+    SetDCBrushColor(hdc, color);
+    FillRect(hdc, rect, GetStockObject(DC_BRUSH) as HBRUSH);
+}
+
+/// One 1px ring: `top_left` on the top and left edges, `bottom_right` on the others.
+unsafe fn draw_bevel(hdc: HDC, rect: &RECT, top_left: u32, bottom_right: u32) {
+    let (l, t, r, b) = (rect.left, rect.top, rect.right, rect.bottom);
+    fill_solid(hdc, &make_rect(l, t, r - 1, t + 1), top_left);
+    fill_solid(hdc, &make_rect(l, t, l + 1, b - 1), top_left);
+    fill_solid(hdc, &make_rect(l, b - 1, r, b), bottom_right);
+    fill_solid(hdc, &make_rect(r - 1, t, r, b), bottom_right);
+}
+
+unsafe fn draw_raised(hdc: HDC, rect: &RECT) {
+    draw_bevel(hdc, rect, WIN95_HIGHLIGHT, WIN95_DARK_SHADOW);
+    draw_bevel(hdc, &inset_rect(rect, 1), WIN95_LIGHT, WIN95_SHADOW);
+}
+
+unsafe fn draw_sunken(hdc: HDC, rect: &RECT) {
+    draw_bevel(hdc, rect, WIN95_SHADOW, WIN95_HIGHLIGHT);
+    draw_bevel(hdc, &inset_rect(rect, 1), WIN95_DARK_SHADOW, WIN95_LIGHT);
+}
+
+unsafe fn draw_etched(hdc: HDC, rect: &RECT) {
+    draw_bevel(hdc, rect, WIN95_SHADOW, WIN95_HIGHLIGHT);
+    draw_bevel(hdc, &inset_rect(rect, 1), WIN95_HIGHLIGHT, WIN95_SHADOW);
+}
+
+unsafe fn draw_label(
+    hdc: HDC,
+    text: &str,
+    rect: &RECT,
+    font: HFONT,
+    color: u32,
+    format: DRAW_TEXT_FORMAT,
+) {
+    let previous_font = SelectObject(hdc, font as _);
+    SetBkMode(hdc, TRANSPARENT as i32);
+    SetTextColor(hdc, color);
+    let text = wide(text);
+    let mut rect = *rect;
+    DrawTextW(hdc, text.as_ptr(), text.len() as i32 - 1, &mut rect, format);
+    SelectObject(hdc, previous_font);
+}
+
+/// Measures `text` as `draw_label` would draw it, starting at `rect`'s top-left.
+unsafe fn measure_label(hdc: HDC, text: &str, rect: &RECT, font: HFONT) -> RECT {
+    let previous_font = SelectObject(hdc, font as _);
+    let text = wide(text);
+    let mut measured = *rect;
+    DrawTextW(
+        hdc,
+        text.as_ptr(),
+        text.len() as i32 - 1,
+        &mut measured,
+        DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX,
+    );
+    SelectObject(hdc, previous_font);
+    measured
+}
+
+/// Disabled text is embossed: a white copy offset by 1px under the gray one.
+unsafe fn draw_state_label(
+    hdc: HDC,
+    text: &str,
+    rect: &RECT,
+    font: HFONT,
+    disabled: bool,
+    format: DRAW_TEXT_FORMAT,
+) {
+    if disabled {
+        draw_label(
+            hdc,
+            text,
+            &offset_rect(rect, 1),
+            font,
+            WIN95_HIGHLIGHT,
+            format,
+        );
+        draw_label(hdc, text, rect, font, WIN95_SHADOW, format);
+    } else {
+        draw_label(hdc, text, rect, font, WIN95_TEXT, format);
+    }
+}
+
+/// Etched group frame with the bold title cut into the top edge, 8px from the
+/// left with 4px of face color either side of the text.
+unsafe fn draw_group(hdc: HDC, title: &str, rect: &RECT, font: HFONT) {
+    draw_etched(
+        hdc,
+        &make_rect(rect.left, rect.top + 6, rect.right, rect.bottom),
+    );
+    let text_origin = make_rect(rect.left + 12, rect.top, rect.right, rect.top + 14);
+    let text_rect = measure_label(hdc, title, &text_origin, font);
+    fill_solid(
+        hdc,
+        &make_rect(rect.left + 8, rect.top, text_rect.right + 4, rect.top + 14),
+        WIN95_FACE,
+    );
+    draw_label(
+        hdc,
+        title,
+        &text_origin,
+        font,
+        WIN95_TEXT,
+        DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX,
+    );
+}
+
+unsafe fn draw_push_button(hdc: HDC, rect: &RECT, text: &str, state: u32, font: HFONT) {
+    let pressed = state & ODS_SELECTED != 0;
+    fill_solid(hdc, rect, WIN95_FACE);
+    if pressed {
+        draw_sunken(hdc, rect);
+    } else {
+        draw_raised(hdc, rect);
+    }
+    let label_rect = if pressed { offset_rect(rect, 1) } else { *rect };
+    draw_state_label(
+        hdc,
+        text,
+        &label_rect,
+        font,
+        state & ODS_DISABLED != 0,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+    );
+    if state & ODS_FOCUS != 0 {
+        DrawFocusRect(hdc, &inset_rect(rect, 4));
+    }
+}
+
+// The classic 7x7 check mark.
+const CHECK_MARK: [&str; 7] = [
+    "......#", ".....##", "#...###", "##.###.", "#####..", ".###...", "..#....",
+];
+
+unsafe fn draw_checkbox(hdc: HDC, rect: &RECT, text: &str, checked: bool, state: u32, font: HFONT) {
+    let disabled = state & ODS_DISABLED != 0;
+    fill_solid(hdc, rect, WIN95_FACE);
+
+    let top = rect.top + (rect.bottom - rect.top - 13) / 2;
+    let check_box = make_rect(rect.left, top, rect.left + 13, top + 13);
+    let pressed = state & ODS_SELECTED != 0;
+    fill_solid(
+        hdc,
+        &inset_rect(&check_box, 2),
+        if disabled || pressed {
+            WIN95_FACE
+        } else {
+            WIN95_WINDOW
+        },
+    );
+    draw_sunken(hdc, &check_box);
+    if checked {
+        let mark_color = if disabled { WIN95_SHADOW } else { WIN95_TEXT };
+        for (row, pattern) in CHECK_MARK.iter().enumerate() {
+            for (column, pixel) in pattern.bytes().enumerate() {
+                if pixel == b'#' {
+                    SetPixelV(
+                        hdc,
+                        check_box.left + 3 + column as i32,
+                        check_box.top + 3 + row as i32,
+                        mark_color,
+                    );
+                }
+            }
+        }
+    }
+
+    let label_rect = make_rect(check_box.right + 4, rect.top, rect.right, rect.bottom);
+    let format = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX;
+    draw_state_label(hdc, text, &label_rect, font, disabled, format);
+    if state & ODS_FOCUS != 0 {
+        let measured = measure_label(hdc, text, &label_rect, font);
+        let height = measured.bottom - measured.top;
+        let text_top = rect.top + (rect.bottom - rect.top - height) / 2;
+        DrawFocusRect(
+            hdc,
+            &make_rect(
+                label_rect.left - 1,
+                text_top - 1,
+                measured.right + 1,
+                text_top + height + 1,
+            ),
+        );
+    }
+}
+
+/// A drop-down list field: white sunken box, selection text, and a raised
+/// arrow button on the right. Clicking it opens a popup menu of the choices.
+unsafe fn draw_dropdown(hdc: HDC, rect: &RECT, text: &str, state: u32, font: HFONT) {
+    draw_sunken(hdc, rect);
+    let inner = inset_rect(rect, 2);
+    fill_solid(hdc, &inner, WIN95_WINDOW);
+
+    let button = make_rect(inner.right - 16, inner.top, inner.right, inner.bottom);
+    let pressed = state & ODS_SELECTED != 0;
+    fill_solid(hdc, &button, WIN95_FACE);
+    if pressed {
+        draw_bevel(hdc, &button, WIN95_SHADOW, WIN95_SHADOW);
+    } else {
+        draw_raised(hdc, &button);
+    }
+    let shift = pressed as i32;
+    let center_x = (button.left + button.right) / 2 + shift;
+    let arrow_top = (button.top + button.bottom) / 2 - 2 + shift;
+    for row in 0..4 {
+        fill_solid(
+            hdc,
+            &make_rect(
+                center_x - 3 + row,
+                arrow_top + row,
+                center_x + 4 - row,
+                arrow_top + row + 1,
+            ),
+            WIN95_TEXT,
+        );
+    }
+
+    let field = make_rect(
+        inner.left + 1,
+        inner.top + 1,
+        button.left - 1,
+        inner.bottom - 1,
+    );
+    let focused = state & ODS_FOCUS != 0;
+    if focused {
+        fill_solid(hdc, &field, WIN95_SELECTION);
+    }
+    let mut text_rect = field;
+    text_rect.left += 2;
+    draw_label(
+        hdc,
+        text,
+        &text_rect,
+        font,
+        if focused {
+            WIN95_SELECTION_TEXT
+        } else {
+            WIN95_TEXT
+        },
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+    );
+    if focused {
+        DrawFocusRect(hdc, &field);
+    }
+}
+
+/// Custom-draws the trackbar's channel and pointed thumb; tick marks keep the
+/// default drawing.
+unsafe fn draw_trackbar_part(draw: &NMCUSTOMDRAW) -> u32 {
+    match draw.dwDrawStage {
+        CDDS_PREPAINT => CDRF_NOTIFYITEMDRAW,
+        CDDS_ITEMPREPAINT => match draw.dwItemSpec as u32 {
+            TBCD_CHANNEL => {
+                fill_solid(draw.hdc, &draw.rc, WIN95_WINDOW);
+                draw_sunken(draw.hdc, &draw.rc);
+                CDRF_SKIPDEFAULT
+            }
+            TBCD_THUMB => {
+                draw_trackbar_thumb(draw.hdc, &draw.rc);
+                CDRF_SKIPDEFAULT
+            }
+            _ => CDRF_DODEFAULT,
+        },
+        _ => CDRF_DODEFAULT,
+    }
+}
+
+/// A raised thumb whose bottom narrows to a point toward the tick marks.
+unsafe fn draw_trackbar_thumb(hdc: HDC, rect: &RECT) {
+    let (l, t, r) = (rect.left, rect.top, rect.right);
+    let half = (r - l) / 2;
+    let body_bottom = rect.bottom - half;
+
+    fill_solid(hdc, &make_rect(l, t, r, body_bottom), WIN95_FACE);
+    fill_solid(hdc, &make_rect(l, t, r - 1, t + 1), WIN95_HIGHLIGHT);
+    fill_solid(hdc, &make_rect(l, t, l + 1, body_bottom), WIN95_HIGHLIGHT);
+    fill_solid(hdc, &make_rect(l + 1, t + 1, r - 2, t + 2), WIN95_LIGHT);
+    fill_solid(
+        hdc,
+        &make_rect(l + 1, t + 1, l + 2, body_bottom),
+        WIN95_LIGHT,
+    );
+    fill_solid(hdc, &make_rect(r - 1, t, r, body_bottom), WIN95_DARK_SHADOW);
+    fill_solid(
+        hdc,
+        &make_rect(r - 2, t + 1, r - 1, body_bottom),
+        WIN95_SHADOW,
+    );
+
+    for row in 0..half {
+        let y = body_bottom + row;
+        let left = l + row;
+        let right = r - 1 - row;
+        if right < left {
+            break;
+        }
+        fill_solid(hdc, &make_rect(left, y, right + 1, y + 1), WIN95_FACE);
+        SetPixelV(hdc, left, y, WIN95_HIGHLIGHT);
+        SetPixelV(hdc, right, y, WIN95_DARK_SHADOW);
+        if right - 1 > left {
+            SetPixelV(hdc, right - 1, y, WIN95_SHADOW);
+        }
+    }
+}
+
+// Owner-drawn checkboxes keep their checked state in the control's user data.
+unsafe fn set_checked(hwnd: HWND, checked: bool) {
+    SetWindowLongPtrW(hwnd, GWLP_USERDATA, checked as isize);
+    InvalidateRect(hwnd, null(), 0);
+}
+
+unsafe fn is_checked(hwnd: HWND) -> bool {
+    GetWindowLongPtrW(hwnd, GWLP_USERDATA) != 0
+}
+
+unsafe fn toggle_checked(hwnd: HWND) {
+    set_checked(hwnd, !is_checked(hwnd));
 }
 
 fn wide(text: &str) -> Vec<u16> {
@@ -1808,7 +2578,7 @@ unsafe extern "system" fn window_proc(
         }
         WM_COMMAND => {
             if let Some(app) = app {
-                app.handle_command((wparam & 0xffff) as i32);
+                app.handle_command((wparam & 0xffff) as i32, ((wparam >> 16) & 0xffff) as u32);
             }
             0
         }
@@ -1873,10 +2643,37 @@ unsafe extern "system" fn window_proc(
             }
             0
         }
+        WM_DRAWITEM => {
+            if let Some(app) = app {
+                app.draw_item(&*(lparam as *const DRAWITEMSTRUCT));
+                return 1;
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_MEASUREITEM => {
+            let item = &mut *(lparam as *mut MEASUREITEMSTRUCT);
+            if item.CtlType == ODT_LISTBOX {
+                item.itemHeight = LIST_ROW_HEIGHT;
+                return 1;
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        WM_NOTIFY => {
+            if let Some(app) = app {
+                let header = &*(lparam as *const NMHDR);
+                if header.hwndFrom == app.controls.increment_track && header.code == NM_CUSTOMDRAW {
+                    return draw_trackbar_part(&*(lparam as *const NMCUSTOMDRAW)) as isize;
+                }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
         WM_CTLCOLORSTATIC => {
             if let Some(app) = app {
+                if lparam == app.controls.clock_swatch as isize {
+                    return app.clock_brush as isize;
+                }
                 SetBkMode(wparam as _, TRANSPARENT as i32);
-                SetTextColor(wparam as _, sys_color(COLOR_BTNTEXT));
+                SetTextColor(wparam as _, WIN95_TEXT);
                 return app.bg_brush as isize;
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -1885,20 +2682,20 @@ unsafe extern "system" fn window_proc(
             if let Some(app) = app {
                 let is_recording = app.recording_control() == Some(lparam as HWND);
                 if is_recording {
-                    SetBkColor(wparam as _, sys_color(COLOR_HIGHLIGHT));
-                    SetTextColor(wparam as _, sys_color(COLOR_HIGHLIGHTTEXT));
+                    SetBkColor(wparam as _, WIN95_SELECTION);
+                    SetTextColor(wparam as _, WIN95_SELECTION_TEXT);
                     return app.highlight_brush as isize;
                 }
-                SetBkColor(wparam as _, sys_color(COLOR_WINDOW));
-                SetTextColor(wparam as _, sys_color(COLOR_WINDOWTEXT));
+                SetBkColor(wparam as _, WIN95_WINDOW);
+                SetTextColor(wparam as _, WIN95_TEXT);
                 return app.white_brush as isize;
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_CTLCOLORLISTBOX => {
             if let Some(app) = app {
-                SetBkColor(wparam as _, sys_color(COLOR_WINDOW));
-                SetTextColor(wparam as _, sys_color(COLOR_WINDOWTEXT));
+                SetBkColor(wparam as _, WIN95_WINDOW);
+                SetTextColor(wparam as _, WIN95_TEXT);
                 return app.white_brush as isize;
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -1906,7 +2703,7 @@ unsafe extern "system" fn window_proc(
         WM_CTLCOLORBTN => {
             if let Some(app) = app {
                 SetBkMode(wparam as _, TRANSPARENT as i32);
-                SetTextColor(wparam as _, sys_color(COLOR_BTNTEXT));
+                SetTextColor(wparam as _, WIN95_TEXT);
                 return app.bg_brush as isize;
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -1951,6 +2748,38 @@ mod tests {
         assert_eq!(parse_hotkey("ctrl+alt+up").unwrap().vk, VK_UP as u32);
         assert_eq!(parse_hotkey("shift+f12").unwrap().vk, VK_F12 as u32);
         assert!(parse_hotkey("").is_none());
+    }
+
+    #[test]
+    fn round_trips_hex_clock_colors() {
+        assert_eq!(parse_hex_color("#ff8000"), Some(0x0000_80ff));
+        assert_eq!(parse_hex_color(" 2B2B2B "), Some(0x002b_2b2b));
+        assert_eq!(format_hex_color(0x0000_80ff), "#ff8000");
+        assert!(parse_hex_color("#fff").is_none());
+        assert!(parse_hex_color("#gg0000").is_none());
+    }
+
+    #[test]
+    fn places_clock_inside_the_requested_corner_with_padding() {
+        let client = RECT {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let (rect, font_height, format) = clock_layout(&client, "bottom-right");
+        let padding = font_height / 2;
+        assert!(padding > 0);
+        assert_eq!(rect.right, client.right - padding);
+        assert_eq!(rect.bottom, client.bottom - padding);
+        assert_ne!(format & DT_RIGHT, 0);
+        assert_ne!(format & DT_BOTTOM, 0);
+
+        let (rect, _, format) = clock_layout(&client, "top-left");
+        assert_eq!((rect.left, rect.top), (padding, padding));
+        assert_eq!(format & (DT_RIGHT | DT_BOTTOM), 0);
+
+        assert_eq!(clock_corner_index("unknown"), 3);
     }
 
     fn app_window() -> WindowSnapshot {
